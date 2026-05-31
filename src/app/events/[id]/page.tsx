@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { MapPin, CalendarDays, BookmarkPlus } from "lucide-react";
@@ -7,6 +8,7 @@ import { createUserEvent } from "@/api/userEvents";
 import { createUserSchedule } from "@/api/userSchedule";
 import { getEvent, getEventTimetable } from "@/api/events";
 import { TimetableList } from "@/components/events/timetable-list";
+import { useRecentlyViewed } from "@/hooks/use-recently-viewed";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -20,7 +22,12 @@ const statusActions: { status: UserEventStatus; label: string; className: string
 
 export default function EventDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const { record } = useRecentlyViewed();
   const event = useQuery({ queryKey: ["event", id], queryFn: () => getEvent(id) });
+
+  useEffect(() => {
+    if (event.data) record(event.data);
+  }, [event.data, record]);
   const timetable = useQuery({
     queryKey: ["event-timetable", id],
     queryFn: () => getEventTimetable(id),
