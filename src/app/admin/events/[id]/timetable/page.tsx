@@ -13,7 +13,7 @@ import { useUxMetrics } from "@/store/ux-metrics";
 import type { TimetableItemPayload } from "@/types/api";
 
 function blankRow(type = "live"): TimetableItemPayload {
-  return { title: "", stage_name: "", start_time: "18:00", end_time: "18:20", item_type: type, notes: "", member_ids: [] };
+  return { title: "", stage_name: "", start_time: "18:00", end_time: "18:20", session_type: type, notes: "", member_ids: [] };
 }
 
 export default function TimetableEditorPage() {
@@ -40,7 +40,7 @@ export default function TimetableEditorPage() {
         stage_name: item.stage_name,
         start_time: item.start_time,
         end_time: item.end_time,
-        item_type: item.item_type,
+        session_type: item.session_type,
         notes: item.notes,
         member_ids: [],
       })));
@@ -93,7 +93,7 @@ export default function TimetableEditorPage() {
             <Button onClick={() => setRows((cur) => [...cur, blankRow("live")])} className="bg-[#0f766e] gap-1">
               <Plus size={15} /> ライブ
             </Button>
-            <Button onClick={() => setRows((cur) => [...cur, blankRow("benefit")])} className="bg-[#2563eb] gap-1">
+            <Button onClick={() => setRows((cur) => [...cur, blankRow("meet_and_greet")])} className="bg-[#2563eb] gap-1">
               <Sparkles size={15} /> 特典会
             </Button>
           </div>
@@ -124,12 +124,12 @@ export default function TimetableEditorPage() {
                   className="h-8 text-sm"
                 />
                 <select
-                  value={row.item_type}
-                  onChange={(e) => update(index, { item_type: e.target.value })}
+                  value={row.session_type}
+                  onChange={(e) => update(index, { session_type: e.target.value })}
                   className="h-8 shrink-0 rounded-md border border-[var(--border)] bg-white px-2 text-xs"
                 >
                   <option value="live">live</option>
-                  <option value="benefit">benefit</option>
+                  <option value="meet_and_greet">meet_and_greet</option>
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-2 pl-8">

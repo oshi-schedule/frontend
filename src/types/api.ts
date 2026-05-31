@@ -1,4 +1,4 @@
-export type UserEventStatus = "interested" | "planned" | "attended";
+export type UserEventStatus = "interested" | "attending" | "attended";
 export type ScheduleType = "event" | "hotel" | "train" | "flight" | "custom";
 
 export interface Venue {
@@ -36,7 +36,7 @@ export interface EventUpdatePayload {
 
 export interface TimetableBulkItem {
   group_name?: string | null;
-  item_type: string;
+  session_type: string;
   start_at: string;
   end_at: string;
   stage_name?: string | null;
@@ -67,7 +67,7 @@ export interface TimetableItem {
   stage_name: string | null;
   start_time: string;
   end_time: string;
-  item_type: string;
+  session_type: string;
   notes: string | null;
 }
 
@@ -77,7 +77,7 @@ export interface TimetableItemPayload {
   stage_name?: string | null;
   start_time: string;
   end_time: string;
-  item_type: string;
+  session_type: string;
   notes?: string | null;
   member_ids: string[];
 }

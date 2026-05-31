@@ -45,7 +45,7 @@ const QUICK_ACTIONS_DESKTOP = [
 
 const STATUS_LABEL: Record<string, string> = {
   interested: "気になる",
-  planned: "行く予定",
+  attending: "行く予定",
   attended: "参加済み",
 };
 

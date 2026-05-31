@@ -16,7 +16,7 @@ import type { UserEventStatus } from "@/types/api";
 
 const statusActions: { status: UserEventStatus; label: string; className: string }[] = [
   { status: "interested", label: "気になる", className: "bg-[#0f766e]" },
-  { status: "planned", label: "行く予定", className: "bg-[var(--primary)]" },
+  { status: "attending", label: "行く予定", className: "bg-[var(--primary)]" },
   { status: "attended", label: "参加済み", className: "bg-[#525252]" },
 ];
 

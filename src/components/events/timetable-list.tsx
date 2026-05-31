@@ -19,7 +19,7 @@ export function TimetableList({ timetable }: { timetable?: Timetable }) {
           <div>
             <div className="flex items-center gap-2">
               <h3 className="font-semibold">{item.title}</h3>
-              <Badge>{item.item_type}</Badge>
+              <Badge>{item.session_type}</Badge>
             </div>
             <p className="mt-1 text-sm text-[var(--muted)]">{item.stage_name ?? "ステージ未設定"}</p>
             {item.notes ? <p className="mt-1 text-sm">{item.notes}</p> : null}
