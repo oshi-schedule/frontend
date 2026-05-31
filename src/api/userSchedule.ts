@@ -11,6 +11,25 @@ export function createUserSchedule(payload: {
 }) {
   return apiFetch<UserScheduleItem>("/user-schedule", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
+}
+
+export function updateUserSchedule(
+  id: string,
+  payload: {
+    schedule_type?: ScheduleType | null;
+    title?: string | null;
+    start_at?: string | null;
+    end_at?: string | null;
+  },
+) {
+  return apiFetch<UserScheduleItem>(`/user-schedule/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteUserSchedule(id: string) {
+  return apiFetch<void>(`/user-schedule/${id}`, { method: "DELETE" });
 }
