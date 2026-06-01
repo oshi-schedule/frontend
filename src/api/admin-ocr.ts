@@ -1,8 +1,8 @@
 import { apiFetch } from "@/api/client";
 import type { SourceRead } from "@/types/api";
 
-export type OCRTestSourceType = "flyer" | "timetable" | "x_post" | "meet_and_greet";
-export type OCRUploadSessionItemSourceType = OCRTestSourceType | "other";
+export type OCRTestSourceType = "flyer" | "schedule_document" | "x_post" | "other" | "timetable" | "meet_and_greet";
+export type OCRUploadSessionItemSourceType = OCRTestSourceType;
 
 export interface SourceTypeTopCandidate {
   source_type: string;
@@ -50,7 +50,10 @@ export interface OCRTestReparseResult {
     source_type_audit: SourceTypeAudit | null;
     ground_truth: OCRTestGroundTruth | null;
     canonical_document?: unknown;
-    session?: OCRUploadSessionAggregationDecision;
+    event_candidates?: OCRImageEventCandidate[];
+    live_sessions?: Array<Record<string, unknown>>;
+    meet_and_greet_sessions?: Array<Record<string, unknown>>;
+    session?: OCRUploadSession | null;
   };
   resolution: {
     action: "matched_existing" | "created_event" | "candidate";
@@ -72,6 +75,7 @@ export interface OCRTestReparseResult {
     asset_id: string;
     ocr_result_id?: string;
     parsing_result_id?: string;
+    source_asset_id?: string;
     raw_input_id: string | null;
     phash: string;
     reused_existing_raw_input: boolean;
@@ -84,6 +88,9 @@ export interface OCRTestReparseResult {
     canonical_document?: any;
     parsed?: any;
     structured_data?: Record<string, unknown> | null;
+    event_candidates?: OCRImageEventCandidate[];
+    live_sessions?: Array<Record<string, unknown>>;
+    meet_and_greet_sessions?: Array<Record<string, unknown>>;
     ndlocr_output: Array<{
       file: string;
       payload: unknown;
@@ -109,21 +116,72 @@ export interface OCRTestGroundTruth {
 }
 
 export interface OCRUploadSessionAggregation {
+  image_candidates: OCRImageEventCandidate[];
+  event_candidates: OCRCanonicalEventCandidate[];
+  canonical_event_candidate: OCRCanonicalEventCandidate | null;
   event_name_candidates: string[];
   date_candidates: string[];
   venue_candidates: string[];
   source_type_candidates: OCRUploadSessionItemSourceType[];
 }
 
-export interface OCRUploadSessionAggregationDecision {
+export interface OCRImageEventCandidate {
   event_name: string | null;
   event_date: string | null;
   venue_name: string | null;
   source_type: OCRUploadSessionItemSourceType;
   confidence: number;
+  notes?: string[];
+}
+
+export interface OCRCanonicalEventCandidate {
+  event_name: string | null;
+  event_date: string | null;
+  venue_name: string | null;
+  source_type: OCRUploadSessionItemSourceType;
+  source_count: number;
+  confidence: number;
   reasons: string[];
-  selected_item_id: string | null;
-  selected_item_source_type: OCRUploadSessionItemSourceType | null;
+  selected_item_id?: string | null;
+  selected_item_source_type?: OCRUploadSessionItemSourceType | null;
+  live_sessions: Array<Record<string, unknown>>;
+  meet_and_greet_sessions: Array<Record<string, unknown>>;
+  source_asset_ids: string[];
+  parsing_result_ids: string[];
+}
+
+export interface OCRUploadSessionStructuredResult {
+  event_name: string | null;
+  event_date: string | null;
+  venue_name: string | null;
+  event_core_id: string | null;
+}
+
+export interface OCRUploadSessionRevision {
+  id: string;
+  session_id: string;
+  revision: number;
+  ai_extracted_result: OCRUploadSessionStructuredResult;
+  human_reviewed_result: OCRUploadSessionStructuredResult;
+  final_result: OCRUploadSessionStructuredResult;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OCRUploadSessionEventCoreCandidate {
+  event_core_id: string;
+  event_name: string;
+  event_date: string;
+  venue_name: string | null;
+  match_score: number;
+  match_reasons: string[];
+}
+
+export interface OCRUploadSessionEventCoreResolution {
+  canonical_event_candidate: OCRCanonicalEventCandidate | null;
+  event_core_candidates: OCRUploadSessionEventCoreCandidate[];
+  selected_event_core_candidate: OCRUploadSessionEventCoreCandidate | null;
 }
 
 export interface OCRUploadSessionItem {
@@ -148,7 +206,11 @@ export interface OCRUploadSession {
   event_core_id: string | null;
   items: OCRUploadSessionItem[];
   aggregation: OCRUploadSessionAggregation;
-  decision: OCRUploadSessionAggregationDecision | null;
+  decision: OCRCanonicalEventCandidate | null;
+  canonical_event_candidate: OCRCanonicalEventCandidate | null;
+  revisions: OCRUploadSessionRevision[];
+  latest_revision: OCRUploadSessionRevision | null;
+  event_core_resolution: OCRUploadSessionEventCoreResolution;
 }
 
 export interface OCRUploadSessionCreatePayload {
@@ -168,6 +230,20 @@ export interface OCRUploadSessionUpdatePayload {
 export interface OCRUploadSessionItemCreatePayload {
   parsing_result_id: string;
   source_type: OCRUploadSessionItemSourceType;
+}
+
+export interface OCRUploadSessionReviewUpsertPayload {
+  event_name?: string | null;
+  event_date?: string | null;
+  venue_name?: string | null;
+}
+
+export interface OCRUploadSessionConfirmEventCorePayload {
+  mode: "create_new" | "link_existing";
+  event_core_id?: string | null;
+  event_name?: string | null;
+  event_date?: string | null;
+  venue_name?: string | null;
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -249,6 +325,20 @@ export function updateOCRUploadSession(sessionId: string, payload: OCRUploadSess
 
 export function addOCRUploadSessionItem(sessionId: string, payload: OCRUploadSessionItemCreatePayload) {
   return apiFetch<OCRUploadSessionItem>(`/admin/ocr-upload-sessions/${sessionId}/items`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function saveOCRUploadSessionReview(sessionId: string, payload: OCRUploadSessionReviewUpsertPayload) {
+  return apiFetch<OCRUploadSession>(`/admin/ocr-upload-sessions/${sessionId}/review`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function confirmOCRUploadSessionEventCore(sessionId: string, payload: OCRUploadSessionConfirmEventCorePayload) {
+  return apiFetch<OCRUploadSession>(`/admin/ocr-upload-sessions/${sessionId}/confirm-event-core`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
