@@ -5,7 +5,8 @@ import { ChevronDown, ChevronRight, ClipboardCopy, ImageIcon, Loader2, UploadClo
 import { ApiError } from "@/api/client";
 import {
   evaluateOCRImages,
-  type OCREvaluationResponse,
+  getOCREvaluationJob,
+  type OCREvaluationJobResponse,
   type OCREvaluationResultItem,
 } from "@/api/admin-ocr";
 import { PageHeader } from "@/components/layout/page-header";
@@ -141,7 +142,7 @@ function regionKindSummary(item: OCREvaluationResultItem): string {
 export default function AdminOCREvaluationPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
-  const [result, setResult] = useState<OCREvaluationResponse | null>(null);
+  const [result, setResult] = useState<OCREvaluationJobResponse | null>(null);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -161,6 +162,26 @@ export default function AdminOCREvaluationPage() {
     const totalSize = selectedFiles.reduce((sum, file) => sum + file.size, 0);
     return `${selectedFiles.length} files / ${(totalSize / 1024 / 1024).toFixed(2)} MB`;
   }, [selectedFiles]);
+
+  const isJobActive = result?.status === "queued" || result?.status === "running";
+  const progressPercent = result?.total ? Math.round((result.completed / result.total) * 100) : 0;
+
+  useEffect(() => {
+    if (!result?.job_id || !isJobActive) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await getOCREvaluationJob(result.job_id);
+        setResult(next);
+      } catch (err) {
+        if (err instanceof ApiError) {
+          setError(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail, null, 2));
+        } else {
+          setError(err instanceof Error ? err.message : "OCR評価ジョブの取得に失敗しました");
+        }
+      }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [isJobActive, result?.job_id]);
 
   function setFiles(files: File[]) {
     setSelectedFiles(files.slice(0, 100));
@@ -238,11 +259,34 @@ export default function AdminOCREvaluationPage() {
             <span className="font-semibold text-slate-900">{fileSummary}</span>
             {selectedFiles.length > 100 ? <span className="ml-2 text-red-600">100枚に切り詰めます</span> : null}
           </div>
-          <Button onClick={handleEvaluate} disabled={!selectedFiles.length || isSubmitting} className="bg-slate-900 text-white">
-            {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <ImageIcon size={16} />}
-            {isSubmitting ? "評価中..." : "評価開始"}
+          <Button onClick={handleEvaluate} disabled={!selectedFiles.length || isSubmitting || isJobActive} className="bg-slate-900 text-white">
+            {isSubmitting || isJobActive ? <Loader2 size={16} className="animate-spin" /> : <ImageIcon size={16} />}
+            {isSubmitting ? "ジョブ作成中..." : isJobActive ? "評価実行中..." : "評価開始"}
           </Button>
         </div>
+
+        {result ? (
+          <div className="rounded-xl border border-sky-100 bg-sky-50 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">
+                  Job: <span className="font-mono">{result.job_id}</span>
+                </p>
+                <p className="mt-1 text-xs text-slate-600">
+                  status: <span className="font-mono">{result.status}</span>
+                  {result.current_filename ? <> / processing: <span className="font-mono">{result.current_filename}</span></> : null}
+                </p>
+              </div>
+              <p className="font-mono text-sm font-semibold text-sky-800">
+                {result.completed} / {result.total} files
+              </p>
+            </div>
+            <div className="mt-3 h-3 overflow-hidden rounded-full bg-white">
+              <div className="h-full rounded-full bg-sky-500 transition-all" style={{ width: `${progressPercent}%` }} />
+            </div>
+            {result.error ? <p className="mt-2 text-sm text-red-700">{result.error}</p> : null}
+          </div>
+        ) : null}
 
         {selectedFiles.length ? (
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">

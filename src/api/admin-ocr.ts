@@ -383,7 +383,16 @@ export interface OCREvaluationResultItem {
   error: string | null;
 }
 
-export interface OCREvaluationResponse {
+export interface OCREvaluationJobResponse {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  total: number;
+  completed: number;
+  current_filename: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
   summary: {
     total: number;
     success: number;
@@ -441,10 +450,14 @@ export function evaluateOCRImages(files: File[]) {
   }
   const formData = new FormData();
   files.forEach((file) => formData.append("files", file));
-  return apiFetch<OCREvaluationResponse>("/admin/ocr/evaluate", {
+  return apiFetch<OCREvaluationJobResponse>("/admin/ocr/evaluate", {
     method: "POST",
     body: formData,
   });
+}
+
+export function getOCREvaluationJob(jobId: string) {
+  return apiFetch<OCREvaluationJobResponse>(`/admin/ocr/evaluate/${jobId}`);
 }
 
 export function saveOCRTestGroundTruth(
