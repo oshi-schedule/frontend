@@ -23,12 +23,15 @@ function buildUrl(path: string, query?: ApiOptions["query"]) {
 }
 
 export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  const headers = new Headers(options.headers);
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+  if (!isFormData && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
   const response = await fetch(buildUrl(path, options.query), {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers
-    }
+    headers
   });
 
   if (!response.ok) {
