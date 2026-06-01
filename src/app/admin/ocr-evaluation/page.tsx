@@ -175,6 +175,14 @@ function performerAssociationSummary(item: OCREvaluationResultItem): string {
     .join(" | ");
 }
 
+function eventAggregateSummary(item: OCREvaluationResultItem): string {
+  const aggregate = item.event_aggregate_candidates?.[0];
+  if (!aggregate) return "-";
+  const groups = aggregate.group_candidates.slice(0, 3).map((group) => group.group_name).join(", ");
+  const headline = [aggregate.event_name, aggregate.event_date, aggregate.venue_name].filter(Boolean).join(" / ");
+  return [headline || "event_aggregate", groups ? `groups:${groups}` : null, `conf:${aggregate.confidence.toFixed(2)}`].filter(Boolean).join(" | ");
+}
+
 export default function AdminOCREvaluationPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
@@ -380,6 +388,7 @@ export default function AdminOCREvaluationPage() {
                     <th className="px-3 py-2">EventInfo候補</th>
                     <th className="px-3 py-2">Performer候補</th>
                     <th className="px-3 py-2">Performer Association</th>
+                    <th className="px-3 py-2">Event Aggregate</th>
                     <th className="px-3 py-2">処理時間</th>
                     <th className="px-3 py-2">ステータス</th>
                   </tr>
@@ -403,6 +412,7 @@ export default function AdminOCREvaluationPage() {
                           <td className="max-w-[320px] truncate px-3 py-2 text-xs text-slate-700">{eventInfoSummary(item)}</td>
                           <td className="max-w-[320px] truncate px-3 py-2 text-xs text-slate-700">{performerListSummary(item)}</td>
                           <td className="max-w-[360px] truncate px-3 py-2 text-xs text-slate-700">{performerAssociationSummary(item)}</td>
+                          <td className="max-w-[420px] truncate px-3 py-2 text-xs text-slate-700">{eventAggregateSummary(item)}</td>
                           <td className="px-3 py-2">{item.processing_time_ms.toFixed(1)} ms</td>
                           <td className="px-3 py-2">
                             {item.error ? (
@@ -414,7 +424,7 @@ export default function AdminOCREvaluationPage() {
                         </tr>
                         {expanded ? (
                           <tr>
-                            <td colSpan={10} className="bg-slate-50 px-4 py-4">
+                            <td colSpan={11} className="bg-slate-50 px-4 py-4">
                               <div className="grid gap-4 lg:grid-cols-2">
                                 <div className="space-y-4">
                                   <div>
@@ -445,6 +455,10 @@ export default function AdminOCREvaluationPage() {
                                   <div>
                                     <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">performer_associations</p>
                                     <JsonView value={item.performer_associations} />
+                                  </div>
+                                  <div>
+                                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">event_aggregate_candidates</p>
+                                    <JsonView value={item.event_aggregate_candidates} />
                                   </div>
                                 </div>
                                 <div className="space-y-4">

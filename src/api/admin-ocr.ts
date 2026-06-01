@@ -391,6 +391,22 @@ export interface OCREvaluationPerformerAssociation {
   confidence: number;
 }
 
+export interface OCREvaluationEventAggregateCandidate {
+  candidate_type: string;
+  event_name: string | null;
+  event_date: string | null;
+  venue_name: string | null;
+  open_time: string | null;
+  start_time: string | null;
+  group_candidates: OCREvaluationGroupCandidate[];
+  source_event_info_candidate_ids: string[];
+  source_performer_association_ids: string[];
+  source_region_ids: string[];
+  source_node_ids: string[];
+  confidence: number;
+  reasons: string[];
+}
+
 export interface OCREvaluationResultItem {
   filename: string;
   source_kind: Record<string, unknown> | null;
@@ -404,6 +420,7 @@ export interface OCREvaluationResultItem {
   event_info_candidates: OCREvaluationExtractedCandidate[];
   performer_list_candidates: OCREvaluationExtractedCandidate[];
   performer_associations: OCREvaluationPerformerAssociation[];
+  event_aggregate_candidates: OCREvaluationEventAggregateCandidate[];
   extracted_candidates: OCREvaluationExtractedCandidate[];
   document_structure: Record<string, unknown> | null;
   ocr_tokens: Array<Record<string, unknown>>;
@@ -437,6 +454,10 @@ export interface OCREvaluationJobResponse {
       rapidfuzz_count: number;
       difflib_count: number;
       samples: Array<Record<string, unknown>>;
+    };
+    event_aggregate_summary?: {
+      count: number;
+      confidence_distribution: Record<string, number>;
     };
     unknown_region_analysis?: {
       count: number;
