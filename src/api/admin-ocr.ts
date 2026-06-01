@@ -366,6 +366,16 @@ export interface OCREvaluationRegionSemantic {
   heuristics: string[];
 }
 
+export interface OCREvaluationExtractedCandidate {
+  candidate_type: string;
+  source_region_id: string;
+  values: Record<string, unknown>;
+  confidence: number;
+  reasons: string[];
+  raw_text: string;
+  source_node_ids: string[];
+}
+
 export interface OCREvaluationResultItem {
   filename: string;
   source_kind: Record<string, unknown> | null;
@@ -376,6 +386,8 @@ export interface OCREvaluationResultItem {
   } | null;
   document_structure_stats: Record<string, number>;
   region_semantics: OCREvaluationRegionSemantic[];
+  event_info_candidates: OCREvaluationExtractedCandidate[];
+  extracted_candidates: OCREvaluationExtractedCandidate[];
   document_structure: Record<string, unknown> | null;
   ocr_tokens: Array<Record<string, unknown>>;
   raw_text: string | null;
@@ -399,6 +411,14 @@ export interface OCREvaluationJobResponse {
     failed: number;
     source_kind_counts: Record<string, number>;
     region_kind_counts: Record<string, number>;
+    unknown_region_analysis?: {
+      count: number;
+      labels: Record<string, number>;
+      row_count_distribution: Record<string, number>;
+      column_count_distribution: Record<string, number>;
+      contains_time_ratio_distribution: Record<string, number>;
+      samples: Array<Record<string, unknown>>;
+    };
   };
   results: OCREvaluationResultItem[];
 }

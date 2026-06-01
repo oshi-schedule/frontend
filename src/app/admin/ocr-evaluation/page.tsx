@@ -139,6 +139,19 @@ function regionKindSummary(item: OCREvaluationResultItem): string {
     .join(", ");
 }
 
+function eventInfoSummary(item: OCREvaluationResultItem): string {
+  if (!item.event_info_candidates?.length) return "-";
+  return item.event_info_candidates
+    .slice(0, 2)
+    .map((candidate) => {
+      const eventName = typeof candidate.values.event_name === "string" ? candidate.values.event_name : "event_info";
+      const eventDate = typeof candidate.values.event_date === "string" ? candidate.values.event_date : "";
+      const venueName = typeof candidate.values.venue_name === "string" ? candidate.values.venue_name : "";
+      return [eventName, eventDate, venueName].filter(Boolean).join(" / ");
+    })
+    .join(" | ");
+}
+
 export default function AdminOCREvaluationPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
@@ -341,6 +354,7 @@ export default function AdminOCREvaluationPage() {
                     <th className="px-3 py-2">SourceKind</th>
                     <th className="px-3 py-2">Region数</th>
                     <th className="px-3 py-2">RegionKind一覧</th>
+                    <th className="px-3 py-2">EventInfo候補</th>
                     <th className="px-3 py-2">処理時間</th>
                     <th className="px-3 py-2">ステータス</th>
                   </tr>
@@ -361,6 +375,7 @@ export default function AdminOCREvaluationPage() {
                           <td className="px-3 py-2 font-mono text-xs">{sourceKindName(item.source_kind)}</td>
                           <td className="px-3 py-2">{item.region_semantics.length}</td>
                           <td className="px-3 py-2 font-mono text-xs">{regionKindSummary(item)}</td>
+                          <td className="max-w-[320px] truncate px-3 py-2 text-xs text-slate-700">{eventInfoSummary(item)}</td>
                           <td className="px-3 py-2">{item.processing_time_ms.toFixed(1)} ms</td>
                           <td className="px-3 py-2">
                             {item.error ? (
@@ -372,7 +387,7 @@ export default function AdminOCREvaluationPage() {
                         </tr>
                         {expanded ? (
                           <tr>
-                            <td colSpan={7} className="bg-slate-50 px-4 py-4">
+                            <td colSpan={8} className="bg-slate-50 px-4 py-4">
                               <div className="grid gap-4 lg:grid-cols-2">
                                 <div className="space-y-4">
                                   <div>
@@ -391,6 +406,10 @@ export default function AdminOCREvaluationPage() {
                                   <div>
                                     <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">document_structure.stats</p>
                                     <JsonView value={item.document_structure_stats} />
+                                  </div>
+                                  <div>
+                                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">event_info_candidates</p>
+                                    <JsonView value={item.event_info_candidates} />
                                   </div>
                                 </div>
                                 <div className="space-y-4">
