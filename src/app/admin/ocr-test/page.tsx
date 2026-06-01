@@ -50,6 +50,17 @@ interface ReviewFormState {
 
 type TimetableEditItem = OCRTimetableScheduleItem & { client_id: string };
 
+interface BBoxCandidate {
+  bbox: {
+    x_min: number;
+    y_min: number;
+    x_max: number;
+    y_max: number;
+  };
+  confidence?: number;
+  reasons?: string[];
+}
+
 function createEmptyGroundTruthForm(): GroundTruthFormState {
   return {
     event_name: "",
@@ -88,6 +99,39 @@ function normalizeSourceType(value: string | null | undefined): OCRTestSourceTyp
 
 function displaySourceType(value: string | null | undefined): string {
   return normalizeSourceType(value) || value || "-";
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function getAttachedImageCandidates(sourceKind: Record<string, unknown> | null | undefined): BBoxCandidate[] {
+  const candidates = sourceKind?.attached_image_candidates;
+  if (!Array.isArray(candidates)) return [];
+  return candidates.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const item = candidate as Record<string, unknown>;
+    const bbox = item.bbox;
+    if (!bbox || typeof bbox !== "object") return [];
+    const bboxItem = bbox as Record<string, unknown>;
+    const xMin = asNumber(bboxItem.x_min);
+    const yMin = asNumber(bboxItem.y_min);
+    const xMax = asNumber(bboxItem.x_max);
+    const yMax = asNumber(bboxItem.y_max);
+    if (xMin === null || yMin === null || xMax === null || yMax === null) return [];
+    return [
+      {
+        bbox: {
+          x_min: xMin,
+          y_min: yMin,
+          x_max: xMax,
+          y_max: yMax,
+        },
+        confidence: asNumber(item.confidence) ?? undefined,
+        reasons: Array.isArray(item.reasons) ? item.reasons.filter((reason): reason is string => typeof reason === "string") : [],
+      },
+    ];
+  });
 }
 
 function normalizeEditableSourceType(value: string | null | undefined): OCRTestSourceType | "" {
@@ -299,6 +343,51 @@ function SourceTypeAuditView({ value }: { value: SourceTypeAudit | null | undefi
   );
 }
 
+function AttachedImageCandidateOverlay({
+  imageUrl,
+  imageWidth,
+  imageHeight,
+  candidates,
+}: {
+  imageUrl: string | undefined;
+  imageWidth: number | undefined;
+  imageHeight: number | undefined;
+  candidates: BBoxCandidate[];
+}) {
+  if (!imageUrl || !imageWidth || !imageHeight) {
+    return <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">プレビュー画像がありません。</p>;
+  }
+  if (!candidates.length) {
+    return <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">attached_image_candidate はありません。</p>;
+  }
+  return (
+    <div className="space-y-2">
+      <div className="relative inline-block max-w-full overflow-hidden rounded-lg border border-sky-200 bg-slate-950">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={imageUrl} alt="attached image candidate overlay" className="max-h-[520px] max-w-full object-contain opacity-90" />
+        {candidates.map((candidate, index) => {
+          const left = (candidate.bbox.x_min / imageWidth) * 100;
+          const top = (candidate.bbox.y_min / imageHeight) * 100;
+          const width = ((candidate.bbox.x_max - candidate.bbox.x_min) / imageWidth) * 100;
+          const height = ((candidate.bbox.y_max - candidate.bbox.y_min) / imageHeight) * 100;
+          return (
+            <div
+              key={`${candidate.bbox.x_min}-${candidate.bbox.y_min}-${index}`}
+              className="absolute border-2 border-sky-400 bg-sky-400/20 shadow-[0_0_0_9999px_rgba(15,23,42,0.25)]"
+              style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
+            >
+              <span className="absolute left-1 top-1 rounded bg-sky-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                #{index + 1} {candidate.confidence !== undefined ? candidate.confidence.toFixed(2) : ""}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <JsonView value={candidates} />
+    </div>
+  );
+}
+
 function TimetableReviewEditor({
   title,
   itemKind,
@@ -412,6 +501,7 @@ function TimetableReviewEditor({
 export default function AdminOCRTestPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [result, setResult] = useState<OCRTestWorkflowResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -437,7 +527,6 @@ export default function AdminOCRTestPage() {
   const [timetableReviewMessage, setTimetableReviewMessage] = useState<string | null>(null);
   const [visionEvaluationMessage, setVisionEvaluationMessage] = useState<string | null>(null);
 
-  const primaryFile = selectedFiles[0] ?? null;
   const primaryAsset = result?.result.assets[0] ?? null;
   const session = result?.result.session ?? null;
   const sessionDecision = session?.decision ?? session?.canonical_event_candidate ?? result?.result.parsed.session?.canonical_event_candidate ?? null;
@@ -454,14 +543,16 @@ export default function AdminOCRTestPage() {
   const selectedEventCoreCandidate = eventCoreResolution?.selected_event_core_candidate ?? null;
 
   useEffect(() => {
-    if (!primaryFile) {
+    if (!selectedFiles.length) {
       setPreviewUrl(null);
+      setPreviewUrls([]);
       return;
     }
-    const objectUrl = URL.createObjectURL(primaryFile);
-    setPreviewUrl(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [primaryFile]);
+    const objectUrls = selectedFiles.map((file) => URL.createObjectURL(file));
+    setPreviewUrls(objectUrls);
+    setPreviewUrl(objectUrls[0] ?? null);
+    return () => objectUrls.forEach((objectUrl) => URL.revokeObjectURL(objectUrl));
+  }, [selectedFiles]);
 
   useEffect(() => {
     setGroundTruthForm(result ? buildGroundTruthForm(result) : createEmptyGroundTruthForm());
@@ -965,6 +1056,9 @@ export default function AdminOCRTestPage() {
                 const sourceTypeAudit = item.parsed?.source_type_audit as SourceTypeAudit | null | undefined;
                 const parsingResultId = item.parsing_result_id ?? "";
                 const sourceTypeGroundTruth = parsingResultId ? sourceTypeGroundTruthByParsingId[parsingResultId] ?? "" : "";
+                const attachedImageCandidates = getAttachedImageCandidates(item.source_kind);
+                const imageWidth = typeof item.image_features?.width === "number" ? item.image_features.width : undefined;
+                const imageHeight = typeof item.image_features?.height === "number" ? item.image_features.height : undefined;
                 return (
                 <div key={item.asset_id} className="rounded-lg border border-[var(--border)] bg-white p-4">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -1042,8 +1136,30 @@ export default function AdminOCRTestPage() {
                     </div>
                     <div className="space-y-3">
                       <div>
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">attached_image_candidate evaluation</p>
+                        <p className="mb-2 text-xs text-slate-500">Xスクショ内の添付画像 bbox 候補です。まず recall を目視評価します。</p>
+                        <AttachedImageCandidateOverlay
+                          imageUrl={previewUrls[index]}
+                          imageWidth={imageWidth}
+                          imageHeight={imageHeight}
+                          candidates={attachedImageCandidates}
+                        />
+                      </div>
+                      <div>
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">source_kind</p>
+                        <JsonView value={item.source_kind ?? {}} />
+                      </div>
+                      <div>
                         <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">structured_data</p>
                         <JsonView value={item.structured_data ?? {}} />
+                      </div>
+                      <div>
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">document_structure</p>
+                        <JsonView value={item.document_structure ?? {}} />
+                      </div>
+                      <div>
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">ocr_tokens</p>
+                        <JsonView value={item.ocr_tokens ?? []} />
                       </div>
                       <div>
                         <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">event_candidates</p>

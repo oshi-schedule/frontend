@@ -82,7 +82,15 @@ export interface OCRTestReparseResult {
     ignore_cache: boolean;
     dry_run: boolean;
     image_path: string;
+    image_features?: {
+      width?: number;
+      height?: number;
+      aspect_ratio?: number;
+    };
     ocr_text?: string;
+    ocr_tokens?: Array<Record<string, unknown>>;
+    document_structure?: Record<string, unknown> | null;
+    source_kind?: Record<string, unknown> | null;
     confidence?: number;
     source_type?: OCRTestSourceType;
     canonical_document?: any;
@@ -340,6 +348,52 @@ export interface OCRVisionEvaluationRunCreatePayload {
   model_name: "gpt-4o" | "gpt-5-mini" | "gpt-5";
 }
 
+export interface OCREvaluationRegionSemantic {
+  region_id: string | null;
+  label: string | null;
+  bbox: Record<string, number> | null;
+  features: Record<string, unknown>;
+  semantic: {
+    kind?: string;
+    confidence?: number;
+    reasons?: string[];
+    source_features?: Record<string, unknown>;
+    classifier?: string;
+  };
+  row_indexes: number[];
+  column_indexes: number[];
+  detection_method: string | null;
+  heuristics: string[];
+}
+
+export interface OCREvaluationResultItem {
+  filename: string;
+  source_kind: Record<string, unknown> | null;
+  image_features: {
+    width?: number;
+    height?: number;
+    aspect_ratio?: number;
+  } | null;
+  document_structure_stats: Record<string, number>;
+  region_semantics: OCREvaluationRegionSemantic[];
+  document_structure: Record<string, unknown> | null;
+  ocr_tokens: Array<Record<string, unknown>>;
+  raw_text: string | null;
+  processing_time_ms: number;
+  error: string | null;
+}
+
+export interface OCREvaluationResponse {
+  summary: {
+    total: number;
+    success: number;
+    failed: number;
+    source_kind_counts: Record<string, number>;
+    region_kind_counts: Record<string, number>;
+  };
+  results: OCREvaluationResultItem[];
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -375,6 +429,21 @@ export async function uploadSourceForOCRTest(files: File[], options?: { ignoreCa
 export function reparseSourceForOCRTest(sourceId: string) {
   return apiFetch<OCRTestWorkflowResponse>(`/sources/${sourceId}/reparse`, {
     method: "POST",
+  });
+}
+
+export function evaluateOCRImages(files: File[]) {
+  if (files.length === 0) {
+    throw new Error("少なくとも1枚の画像を選択してください");
+  }
+  if (files.length > 100) {
+    throw new Error("画像は最大100枚までです");
+  }
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+  return apiFetch<OCREvaluationResponse>("/admin/ocr/evaluate", {
+    method: "POST",
+    body: formData,
   });
 }
 
