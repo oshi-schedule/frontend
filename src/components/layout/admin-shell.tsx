@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, Calendar, FileText, GitMerge, LayoutDashboard, Users, ArrowLeft } from "lucide-react";
+import { Building2, Calendar, FileText, GitMerge, LayoutDashboard, ScanSearch, Users, ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const adminNavItems = [
@@ -12,6 +12,7 @@ const adminNavItems = [
   { href: "/admin/venues", label: "Venues", icon: Building2 },
   { href: "/admin/merge", label: "Merge", icon: GitMerge },
   { href: "/admin/sources", label: "Sources", icon: FileText },
+  { href: "/admin/ocr-test", label: "OCR Test", icon: ScanSearch },
 ];
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
