@@ -376,6 +376,21 @@ export interface OCREvaluationExtractedCandidate {
   source_node_ids: string[];
 }
 
+export interface OCREvaluationGroupCandidate {
+  group_name: string;
+  score: number;
+  match_method: string;
+}
+
+export interface OCREvaluationPerformerAssociation {
+  candidate_type: string;
+  source_region_id: string;
+  source_node_ids: string[];
+  raw_name: string;
+  group_candidates: OCREvaluationGroupCandidate[];
+  confidence: number;
+}
+
 export interface OCREvaluationResultItem {
   filename: string;
   source_kind: Record<string, unknown> | null;
@@ -387,6 +402,8 @@ export interface OCREvaluationResultItem {
   document_structure_stats: Record<string, number>;
   region_semantics: OCREvaluationRegionSemantic[];
   event_info_candidates: OCREvaluationExtractedCandidate[];
+  performer_list_candidates: OCREvaluationExtractedCandidate[];
+  performer_associations: OCREvaluationPerformerAssociation[];
   extracted_candidates: OCREvaluationExtractedCandidate[];
   document_structure: Record<string, unknown> | null;
   ocr_tokens: Array<Record<string, unknown>>;
@@ -411,6 +428,16 @@ export interface OCREvaluationJobResponse {
     failed: number;
     source_kind_counts: Record<string, number>;
     region_kind_counts: Record<string, number>;
+    performer_association_summary?: {
+      count: number;
+      top1_score_distribution: Record<string, number>;
+      match_method_counts: Record<string, number>;
+      exact_count: number;
+      normalized_count: number;
+      rapidfuzz_count: number;
+      difflib_count: number;
+      samples: Array<Record<string, unknown>>;
+    };
     unknown_region_analysis?: {
       count: number;
       labels: Record<string, number>;

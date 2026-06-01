@@ -152,6 +152,29 @@ function eventInfoSummary(item: OCREvaluationResultItem): string {
     .join(" | ");
 }
 
+function performerListSummary(item: OCREvaluationResultItem): string {
+  const names = item.performer_list_candidates?.flatMap((candidate) => {
+    const value = candidate.values.performer_name_candidates;
+    return Array.isArray(value) ? value.filter((name): name is string => typeof name === "string") : [];
+  }) ?? [];
+  if (!names.length) return "-";
+  const preview = names.slice(0, 4).join(", ");
+  return names.length > 4 ? `${preview} +${names.length - 4}` : preview;
+}
+
+function performerAssociationSummary(item: OCREvaluationResultItem): string {
+  const associations = item.performer_associations ?? [];
+  if (!associations.length) return "-";
+  return associations
+    .slice(0, 3)
+    .map((association) => {
+      const top = association.group_candidates?.[0];
+      if (!top) return association.raw_name;
+      return `${association.raw_name} → ${top.group_name} (${top.score.toFixed(2)})`;
+    })
+    .join(" | ");
+}
+
 export default function AdminOCREvaluationPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
@@ -355,6 +378,8 @@ export default function AdminOCREvaluationPage() {
                     <th className="px-3 py-2">Region数</th>
                     <th className="px-3 py-2">RegionKind一覧</th>
                     <th className="px-3 py-2">EventInfo候補</th>
+                    <th className="px-3 py-2">Performer候補</th>
+                    <th className="px-3 py-2">Performer Association</th>
                     <th className="px-3 py-2">処理時間</th>
                     <th className="px-3 py-2">ステータス</th>
                   </tr>
@@ -376,6 +401,8 @@ export default function AdminOCREvaluationPage() {
                           <td className="px-3 py-2">{item.region_semantics.length}</td>
                           <td className="px-3 py-2 font-mono text-xs">{regionKindSummary(item)}</td>
                           <td className="max-w-[320px] truncate px-3 py-2 text-xs text-slate-700">{eventInfoSummary(item)}</td>
+                          <td className="max-w-[320px] truncate px-3 py-2 text-xs text-slate-700">{performerListSummary(item)}</td>
+                          <td className="max-w-[360px] truncate px-3 py-2 text-xs text-slate-700">{performerAssociationSummary(item)}</td>
                           <td className="px-3 py-2">{item.processing_time_ms.toFixed(1)} ms</td>
                           <td className="px-3 py-2">
                             {item.error ? (
@@ -387,7 +414,7 @@ export default function AdminOCREvaluationPage() {
                         </tr>
                         {expanded ? (
                           <tr>
-                            <td colSpan={8} className="bg-slate-50 px-4 py-4">
+                            <td colSpan={10} className="bg-slate-50 px-4 py-4">
                               <div className="grid gap-4 lg:grid-cols-2">
                                 <div className="space-y-4">
                                   <div>
@@ -410,6 +437,14 @@ export default function AdminOCREvaluationPage() {
                                   <div>
                                     <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">event_info_candidates</p>
                                     <JsonView value={item.event_info_candidates} />
+                                  </div>
+                                  <div>
+                                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">performer_list_candidates</p>
+                                    <JsonView value={item.performer_list_candidates} />
+                                  </div>
+                                  <div>
+                                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">performer_associations</p>
+                                    <JsonView value={item.performer_associations} />
                                   </div>
                                 </div>
                                 <div className="space-y-4">
