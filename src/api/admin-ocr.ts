@@ -184,10 +184,91 @@ export interface OCRUploadSessionEventCoreResolution {
   selected_event_core_candidate: OCRUploadSessionEventCoreCandidate | null;
 }
 
+export interface OCRTimetableScheduleItem {
+  id?: string | null;
+  item_kind: "live" | "meet_and_greet";
+  title: string | null;
+  performer_name: string | null;
+  stage_name: string | null;
+  booth_name: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  confidence?: number | null;
+  source_extraction_id?: string | null;
+  source_schedule_item_id?: string | null;
+}
+
+export interface OCRTimetableReviewResult {
+  live_sessions: OCRTimetableScheduleItem[];
+  meet_and_greet_sessions: OCRTimetableScheduleItem[];
+}
+
+export interface OCRVisionStructureExtraction {
+  id: string;
+  session_id: string;
+  session_item_id: string | null;
+  parsing_result_id: string | null;
+  model_name: string;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  inference_time_ms: number | null;
+  estimated_cost_usd: number | null;
+  status: string;
+  error_message: string | null;
+  live_sessions: OCRTimetableScheduleItem[];
+  meet_and_greet_sessions: OCRTimetableScheduleItem[];
+  created_at: string;
+}
+
+export interface OCRVisionEvaluationRun {
+  id: string;
+  session_id: string;
+  session_item_id: string | null;
+  image_id: string | null;
+  parsing_result_id: string | null;
+  model_name: "gpt-4o" | "gpt-5-mini" | "gpt-5" | string;
+  source_type: OCRUploadSessionItemSourceType | null;
+  vision_called: boolean;
+  latency_ms: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost: number | null;
+  live_session_count: number;
+  meet_and_greet_count: number;
+  human_score: number | null;
+  status: string;
+  error_message: string | null;
+  live_sessions: OCRTimetableScheduleItem[];
+  meet_and_greet_sessions: OCRTimetableScheduleItem[];
+  output: OCRTimetableReviewResult;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OCRTimetableReviewRevision {
+  id: string;
+  session_id: string;
+  revision: number;
+  ai_extracted_result: OCRTimetableReviewResult;
+  human_reviewed_result: OCRTimetableReviewResult;
+  final_result: OCRTimetableReviewResult;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OCRTimetableReviewState {
+  revisions: OCRTimetableReviewRevision[];
+  latest_revision: OCRTimetableReviewRevision | null;
+}
+
 export interface OCRUploadSessionItem {
   id: string;
   session_id: string;
   parsing_result_id: string;
+  image_id: string | null;
   source_type: OCRUploadSessionItemSourceType;
   event_name: string | null;
   event_date_str: string | null;
@@ -211,6 +292,9 @@ export interface OCRUploadSession {
   revisions: OCRUploadSessionRevision[];
   latest_revision: OCRUploadSessionRevision | null;
   event_core_resolution: OCRUploadSessionEventCoreResolution;
+  vision_structure_extractions: OCRVisionStructureExtraction[];
+  vision_evaluation_runs: OCRVisionEvaluationRun[];
+  timetable_review: OCRTimetableReviewState;
 }
 
 export interface OCRUploadSessionCreatePayload {
@@ -244,6 +328,16 @@ export interface OCRUploadSessionConfirmEventCorePayload {
   event_name?: string | null;
   event_date?: string | null;
   venue_name?: string | null;
+}
+
+export interface OCRTimetableReviewUpsertPayload {
+  live_sessions: OCRTimetableScheduleItem[];
+  meet_and_greet_sessions: OCRTimetableScheduleItem[];
+}
+
+export interface OCRVisionEvaluationRunCreatePayload {
+  session_item_id: string;
+  model_name: "gpt-4o" | "gpt-5-mini" | "gpt-5";
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -341,5 +435,26 @@ export function confirmOCRUploadSessionEventCore(sessionId: string, payload: OCR
   return apiFetch<OCRUploadSession>(`/admin/ocr-upload-sessions/${sessionId}/confirm-event-core`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function saveOCRUploadSessionTimetableReview(sessionId: string, payload: OCRTimetableReviewUpsertPayload) {
+  return apiFetch<OCRUploadSession>(`/admin/ocr-upload-sessions/${sessionId}/timetable-review`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function runOCRVisionEvaluation(sessionId: string, payload: OCRVisionEvaluationRunCreatePayload) {
+  return apiFetch<OCRUploadSession>(`/admin/ocr-upload-sessions/${sessionId}/vision-evaluation-runs`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateOCRVisionEvaluationHumanScore(runId: string, humanScore: number | null) {
+  return apiFetch<OCRVisionEvaluationRun>(`/admin/ocr-vision-evaluation-runs/${runId}/human-score`, {
+    method: "PATCH",
+    body: JSON.stringify({ human_score: humanScore }),
   });
 }
