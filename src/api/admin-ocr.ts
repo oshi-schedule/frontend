@@ -485,7 +485,8 @@ export interface OCREvaluationJobResponse {
   results: OCREvaluationResultItem[];
 }
 
-export type EventCandidateReviewStatus = "approved" | "edited" | "rejected";
+export type EventCandidateReviewStatus = "pending" | "approved" | "edited" | "rejected";
+export type EventCandidateReviewFinalStatus = Exclude<EventCandidateReviewStatus, "pending">;
 
 export interface EventCandidateReviewCreate {
   candidate_type: string;
@@ -496,6 +497,13 @@ export interface EventCandidateReviewCreate {
   edited_json?: Record<string, unknown> | null;
   review_json: Record<string, unknown>;
   review_status: EventCandidateReviewStatus;
+  reviewer_note?: string | null;
+}
+
+export interface EventCandidateReviewUpdate {
+  edited_json?: Record<string, unknown> | null;
+  review_json: Record<string, unknown>;
+  review_status: EventCandidateReviewFinalStatus;
   reviewer_note?: string | null;
 }
 
@@ -517,6 +525,7 @@ export interface EventCandidateReviewRead {
 
 export interface GroundTruthStats {
   total: number;
+  pending: number;
   approved: number;
   edited: number;
   rejected: number;
@@ -535,6 +544,13 @@ export interface GroundTruthStats {
 export async function createEventCandidateReview(payload: EventCandidateReviewCreate): Promise<EventCandidateReviewRead> {
   return apiFetch<EventCandidateReviewRead>("/admin/event-candidate-reviews", {
     method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateEventCandidateReview(reviewId: string, payload: EventCandidateReviewUpdate): Promise<EventCandidateReviewRead> {
+  return apiFetch<EventCandidateReviewRead>(`/admin/event-candidate-reviews/${reviewId}`, {
+    method: "PATCH",
     body: JSON.stringify(payload),
   });
 }

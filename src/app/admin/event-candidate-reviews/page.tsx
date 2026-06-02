@@ -116,10 +116,14 @@ export default function EventCandidateReviewsPage() {
     <div className="space-y-6">
       <PageHeader title="教師データ分析" subtitle="OCRイベント候補レビューの件数・修正率を見て、次に改善すべきExtractorを判断します。" backHref="/admin" />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
         <Card className="p-4">
           <p className="text-xs uppercase tracking-wide text-slate-400">Total</p>
           <p className="mt-1 text-2xl font-bold text-slate-900">{groundTruthStats?.total ?? reviews.length}</p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-xs uppercase tracking-wide text-slate-400">Pending</p>
+          <p className="mt-1 text-2xl font-bold text-slate-500">{groundTruthStats?.pending ?? counts.pending ?? 0}</p>
         </Card>
         {["approved", "edited", "rejected"].map((status) => (
           <Card key={status} className="p-4">

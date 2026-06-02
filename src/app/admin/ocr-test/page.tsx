@@ -1,23 +1,23 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, ClipboardCopy, ImageIcon, Loader2, Plus, ScanSearch, Trash2 } from "lucide-react";
+import { Check, ClipboardCopy, ImageIcon, Loader2, ScanSearch } from "lucide-react";
 import { ApiError } from "@/api/client";
 import {
+  createEventCandidateReview,
   getOCRReparseJob,
   startOCRReparseJob,
   uploadSourceForOCRTest,
+  type EventCandidateReviewRead,
   type OCREvaluationEventAggregateCandidate,
   type OCRTestWorkflowResponse,
 } from "@/api/admin-ocr";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 
 const ACCEPT = ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp";
 const MAX_UPLOAD_FILES = 4;
-const EVENT_CANDIDATE_REVIEW_BUNDLE_KEY = "oshi_sche_event_candidate_review_bundle";
 const REPARSE_JOB_POLL_INTERVAL_MS = 1500;
 
 type SourceImagePreview = {
@@ -29,15 +29,6 @@ type SourceImagePreview = {
 };
 
 type ProcessingStepKey = "upload" | "ocr" | "aggregation" | "candidate";
-
-type EventCandidateFormState = {
-  event_name: string;
-  event_date: string;
-  venue_name: string;
-  open_time: string;
-  start_time: string;
-  group_candidates: string[];
-};
 
 const PROCESSING_STEPS: Array<{ key: ProcessingStepKey; label: string; description: string }> = [
   { key: "upload", label: "画像保存", description: "ローカル保存とSource作成" },
@@ -62,15 +53,6 @@ function JsonBlock({ value }: { value: unknown }) {
       {JSON.stringify(value, null, 2)}
     </pre>
   );
-}
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(reader.error ?? new Error("画像の読み込みに失敗しました"));
-    reader.readAsDataURL(file);
-  });
 }
 
 function pickCanonicalCandidate(result: OCRTestWorkflowResponse | null) {
@@ -157,42 +139,6 @@ function getSession(result: OCRTestWorkflowResponse | null) {
   return result?.result.session ?? result?.result.parsed.session ?? null;
 }
 
-function buildEventCandidateForm(candidate: OCREvaluationEventAggregateCandidate | null): EventCandidateFormState {
-  return {
-    event_name: candidate?.event_name ?? "",
-    event_date: candidate?.event_date ?? "",
-    venue_name: candidate?.venue_name ?? "",
-    open_time: candidate?.open_time ?? "",
-    start_time: candidate?.start_time ?? "",
-    group_candidates: (candidate?.group_candidates ?? []).map((group) => group.group_name),
-  };
-}
-
-function parseGroupCandidateNames(names: string[]) {
-  return names
-    .map((name) => name.trim())
-    .filter(Boolean)
-    .filter((name, index, names) => names.indexOf(name) === index)
-    .map((group_name) => ({
-      group_name,
-      score: 1,
-      match_method: "manual",
-    }));
-}
-
-function eventCandidateFormMatchesCandidate(form: EventCandidateFormState, candidate: OCREvaluationEventAggregateCandidate): boolean {
-  const candidateGroups = (candidate.group_candidates ?? []).map((group) => group.group_name).join("\n");
-  const formGroups = form.group_candidates.map((name) => name.trim()).filter(Boolean).join("\n");
-  return (
-    form.event_name.trim() === (candidate.event_name ?? "") &&
-    form.event_date.trim() === (candidate.event_date ?? "") &&
-    form.venue_name.trim() === (candidate.venue_name ?? "") &&
-    form.open_time.trim() === (candidate.open_time ?? "") &&
-    form.start_time.trim() === (candidate.start_time ?? "") &&
-    formGroups === candidateGroups.trim()
-  );
-}
-
 export default function AdminOCRTestPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
@@ -208,7 +154,7 @@ export default function AdminOCRTestPage() {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [jobProgress, setJobProgress] = useState(0);
   const [jobMessage, setJobMessage] = useState("");
-  const [eventCandidateForm, setEventCandidateForm] = useState<EventCandidateFormState>(() => buildEventCandidateForm(null));
+  const [draftReview, setDraftReview] = useState<EventCandidateReviewRead | null>(null);
 
   useEffect(() => {
     const urls = files.map((file) => URL.createObjectURL(file));
@@ -230,26 +176,7 @@ export default function AdminOCRTestPage() {
   const canonicalCandidate = pickCanonicalCandidate(result);
   const reviewCandidate = useMemo(() => buildEventAggregateCandidate(result), [result]);
   const isManualReviewCandidate = reviewCandidate?.reasons.includes("manual_ground_truth_review_required") ?? false;
-  const editedReviewCandidate = useMemo<OCREvaluationEventAggregateCandidate | null>(() => {
-    if (!reviewCandidate) return null;
-    return {
-      ...reviewCandidate,
-      event_name: eventCandidateForm.event_name.trim() || null,
-      event_date: eventCandidateForm.event_date.trim() || null,
-      venue_name: eventCandidateForm.venue_name.trim() || null,
-      open_time: eventCandidateForm.open_time.trim() || null,
-      start_time: eventCandidateForm.start_time.trim() || null,
-      group_candidates: parseGroupCandidateNames(eventCandidateForm.group_candidates),
-      reasons: eventCandidateFormMatchesCandidate(eventCandidateForm, reviewCandidate)
-        ? reviewCandidate.reasons
-        : [...reviewCandidate.reasons, "edited_on_ocr_ground_truth_screen"],
-    };
-  }, [eventCandidateForm, reviewCandidate]);
-  const ocrOutput = useMemo(() => buildOcrOutput(editedReviewCandidate), [editedReviewCandidate]);
-
-  useEffect(() => {
-    setEventCandidateForm(buildEventCandidateForm(reviewCandidate));
-  }, [reviewCandidate]);
+  const ocrOutput = useMemo(() => buildOcrOutput(reviewCandidate), [reviewCandidate]);
 
   const sourceImages = useMemo<SourceImagePreview[]>(() => {
     const assets = result?.result.assets ?? [];
@@ -279,6 +206,7 @@ export default function AdminOCRTestPage() {
     setElapsedMs(0);
     setJobProgress(5);
     setJobMessage("");
+    setDraftReview(null);
 
     if (nextFiles.length > MAX_UPLOAD_FILES) {
       setFiles([]);
@@ -287,27 +215,6 @@ export default function AdminOCRTestPage() {
     }
 
     setFiles(nextFiles);
-  }
-
-  function updateEventCandidateGroup(index: number, groupName: string) {
-    setEventCandidateForm((current) => ({
-      ...current,
-      group_candidates: current.group_candidates.map((value, currentIndex) => (currentIndex === index ? groupName : value)),
-    }));
-  }
-
-  function addEventCandidateGroup() {
-    setEventCandidateForm((current) => ({
-      ...current,
-      group_candidates: [...current.group_candidates, ""],
-    }));
-  }
-
-  function removeEventCandidateGroup(index: number) {
-    setEventCandidateForm((current) => ({
-      ...current,
-      group_candidates: current.group_candidates.filter((_, currentIndex) => currentIndex !== index),
-    }));
   }
 
   async function handleSubmit() {
@@ -360,9 +267,11 @@ export default function AdminOCRTestPage() {
       setCompletedSteps(["upload", "ocr", "aggregation"]);
       setCurrentStep("candidate");
       setResult(parsed);
+      const createdDraft = await createPendingReviewDraft(parsed);
+      setDraftReview(createdDraft);
       setCompletedSteps(["upload", "ocr", "aggregation", "candidate"]);
       setCurrentStep("done");
-      setStatusMessage("OCRが完了しました。候補を確認してレビュー画面へ送れます。");
+      setStatusMessage("OCRが完了し、Review DraftをDBに保存しました。PCからEvent Candidate Reviewで編集できます。");
     } catch (error) {
       const message = error instanceof ApiError ? error.message : error instanceof Error ? error.message : "OCR処理に失敗しました。";
       setErrorMessage(message);
@@ -381,7 +290,7 @@ export default function AdminOCRTestPage() {
       session,
       canonical_event_candidate: canonicalCandidate,
       original_event_aggregate_candidate: reviewCandidate,
-      event_aggregate_candidate_prefill: editedReviewCandidate,
+      draft_review: draftReview,
       ocr_output: ocrOutput,
     };
     navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(() => {
@@ -390,61 +299,41 @@ export default function AdminOCRTestPage() {
     });
   }
 
-  async function handleOpenReview() {
-    if (!reviewCandidate || !editedReviewCandidate || !result) return;
-    const imageDataUrls = await Promise.all(files.map((file) => readFileAsDataUrl(file).catch(() => "")));
-    const reviewSourceImages = sourceImages.map((image, index) => ({
-      ...image,
-      image_data_url: imageDataUrls[index] || undefined,
+  async function createPendingReviewDraft(parsed: OCRTestWorkflowResponse): Promise<EventCandidateReviewRead> {
+    const candidate = buildEventAggregateCandidate(parsed);
+    if (!candidate) {
+      throw new Error("Review Draftに必要なEvent Candidateを作成できませんでした。");
+    }
+    const originalOcrOutput = buildOcrOutput(candidate);
+    const reviewPrefill = buildReviewPrefill(candidate);
+    const parsedSession = getSession(parsed);
+    const assets = parsed.result.assets ?? [];
+    const reviewSourceImages = files.map((file, index) => ({
+      filename: file.name,
+      source_kind: "upload_session_image",
+      region_kinds: assets[index]?.source_type ? [assets[index].source_type] : [],
+      image_features: assets[index]?.image_features ?? null,
     }));
-    const originalOcrOutput = buildOcrOutput(reviewCandidate);
-    const reviewPrefill = buildReviewPrefill(editedReviewCandidate);
 
-    const bundle = {
-      created_at: new Date().toISOString(),
-      origin: "ocr_ground_truth",
-      summary: {
-        total: 1,
-        success: 1,
-        failed: 0,
-        source_kind_counts: { upload_session: 1 },
-        region_kind_counts: {},
+    return createEventCandidateReview({
+      candidate_type: candidate.candidate_type || "event_aggregate",
+      source_id: parsed.source.id,
+      upload_session_id: parsedSession?.id ?? parsed.result.session_id ?? null,
+      candidate_json: candidate as unknown as Record<string, unknown>,
+      original_json: originalOcrOutput,
+      edited_json: null,
+      review_json: {
+        origin: "ocr_ground_truth",
+        review_prefill: reviewPrefill,
+        source_filename: files.map((file) => file.name).join(", ") || parsed.source.id,
+        source_images: reviewSourceImages,
       },
-      candidates: [
-        {
-          id: session?.id ?? result.source.id,
-          filename: files.map((file) => file.name).join(", ") || result.source.id,
-          source_id: result.source.id,
-          upload_session_id: session?.id ?? result.result.session_id ?? null,
-          event_aggregate_candidate: reviewCandidate,
-          ocr_output: originalOcrOutput,
-          review_prefill: reviewPrefill,
-          source_kind: {
-            kind: "upload_session",
-            image_count: files.length,
-          },
-          source_images: reviewSourceImages,
-        },
-      ],
-      items: [
-        {
-          id: session?.id ?? result.source.id,
-          filename: files.map((file) => file.name).join(", ") || result.source.id,
-          source_id: result.source.id,
-          upload_session_id: session?.id ?? result.result.session_id ?? null,
-          event_aggregate_candidate: reviewCandidate,
-          ocr_output: originalOcrOutput,
-          review_prefill: reviewPrefill,
-          source_kind: {
-            kind: "upload_session",
-            image_count: files.length,
-          },
-          source_images: reviewSourceImages,
-        },
-      ],
-    };
+      review_status: "pending",
+      reviewer_note: null,
+    });
+  }
 
-    window.localStorage.setItem(EVENT_CANDIDATE_REVIEW_BUNDLE_KEY, JSON.stringify(bundle));
+  function handleOpenReview() {
     window.location.href = "/admin/event-candidate-review";
   }
 
@@ -663,7 +552,7 @@ export default function AdminOCRTestPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Step 3</p>
               <h2 className="mt-1 text-xl font-bold text-slate-950">Event Candidate</h2>
               <p className="mt-2 text-sm text-slate-600">
-                OCRで作られた候補をReviewへ送る前に整えます。ここではDB保存せず、Event Candidate ReviewでApprove/Edit/Rejectした時点で教師データとして保存します。
+                OCRで作られた候補はDBにReview Draftとして保存されます。編集・Approve/Edit/RejectはPCのEvent Candidate Reviewで行います。
               </p>
             </div>
 
@@ -679,89 +568,26 @@ export default function AdminOCRTestPage() {
                   <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isManualReviewCandidate ? "text-amber-700" : "text-sky-700"}`}>
                     {isManualReviewCandidate ? "manual ground truth candidate" : "canonical event candidate"}
                   </p>
-                  <div className="mt-3 grid gap-3">
-                    <label className="space-y-1">
-                      <span className="text-xs font-semibold text-slate-500">event_name</span>
-                      <Input
-                        value={eventCandidateForm.event_name}
-                        onChange={(event) => setEventCandidateForm((current) => ({ ...current, event_name: event.currentTarget.value }))}
-                        placeholder="イベント名"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <span className="text-xs font-semibold text-slate-500">event_date</span>
-                      <Input
-                        type="date"
-                        value={eventCandidateForm.event_date}
-                        onChange={(event) => setEventCandidateForm((current) => ({ ...current, event_date: event.currentTarget.value }))}
-                      />
-                      <span className="text-[11px] text-slate-400">カレンダーから選択できます。</span>
-                    </label>
-                    <label className="space-y-1">
-                      <span className="text-xs font-semibold text-slate-500">venue_name</span>
-                      <Input
-                        value={eventCandidateForm.venue_name}
-                        onChange={(event) => setEventCandidateForm((current) => ({ ...current, venue_name: event.currentTarget.value }))}
-                        placeholder="会場名"
-                      />
-                    </label>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="space-y-1">
-                        <span className="text-xs font-semibold text-slate-500">open_time</span>
-                        <Input
-                          type="time"
-                          value={eventCandidateForm.open_time}
-                          onChange={(event) => setEventCandidateForm((current) => ({ ...current, open_time: event.currentTarget.value }))}
-                        />
-                        <span className="text-[11px] text-slate-400">時刻ピッカーで入力できます。</span>
-                      </label>
-                      <label className="space-y-1">
-                        <span className="text-xs font-semibold text-slate-500">start_time</span>
-                        <Input
-                          type="time"
-                          value={eventCandidateForm.start_time}
-                          onChange={(event) => setEventCandidateForm((current) => ({ ...current, start_time: event.currentTarget.value }))}
-                        />
-                        <span className="text-[11px] text-slate-400">時刻ピッカーで入力できます。</span>
-                      </label>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-semibold text-slate-500">group_candidates</span>
-                        <Button type="button" onClick={addEventCandidateGroup} className="h-8 bg-white px-3 text-xs text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50">
-                          <Plus className="h-3.5 w-3.5" />
-                          グループ追加
-                        </Button>
-                      </div>
-                      <div className="space-y-2">
-                        {eventCandidateForm.group_candidates.length ? (
-                          eventCandidateForm.group_candidates.map((groupName, index) => (
-                            <div key={`event-candidate-group-${index}`} className="flex gap-2">
-                              <Input
-                                value={groupName}
-                                onChange={(event) => updateEventCandidateGroup(index, event.currentTarget.value)}
-                                placeholder={`グループ名 ${index + 1}`}
-                              />
-                              <Button
-                                type="button"
-                                className="h-10 w-10 shrink-0 bg-white p-0 text-red-600 ring-1 ring-slate-200 hover:bg-red-50 hover:text-red-700"
-                                onClick={() => removeEventCandidateGroup(index)}
-                                aria-label={`グループ候補 ${index + 1} を削除`}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="rounded-lg border border-dashed border-slate-300 bg-white/70 p-3 text-sm text-slate-500">
-                            グループ候補は未入力です。「グループ追加」から追加できます。
-                          </div>
-                        )}
-                      </div>
+                  <div className="mt-3 grid gap-3 text-sm">
+                    <div className="grid gap-2 rounded-lg bg-white/70 p-3">
+                      <p><span className="font-semibold text-slate-500">event_name:</span> {reviewCandidate.event_name ?? "-"}</p>
+                      <p><span className="font-semibold text-slate-500">event_date:</span> {reviewCandidate.event_date ?? "-"}</p>
+                      <p><span className="font-semibold text-slate-500">venue_name:</span> {reviewCandidate.venue_name ?? "-"}</p>
+                      <p><span className="font-semibold text-slate-500">open/start:</span> {[reviewCandidate.open_time, reviewCandidate.start_time].filter(Boolean).join(" / ") || "-"}</p>
+                      <p><span className="font-semibold text-slate-500">groups:</span> {reviewCandidate.group_candidates.length}</p>
                     </div>
                     <div className="rounded-lg bg-white/70 p-3 text-xs text-slate-600">
                       confidence: <span className="font-semibold text-slate-900">{formatPercent(reviewCandidate.confidence)}</span>
                     </div>
+                    {draftReview ? (
+                      <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+                        Review Draft保存済み: <span className="font-mono">{draftReview.id}</span>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-slate-200 bg-white/70 p-3 text-xs text-slate-600">
+                        OCR完了後にReview Draftを自動保存します。
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -778,7 +604,7 @@ export default function AdminOCRTestPage() {
 
                 <Button type="button" onClick={handleOpenReview} className="w-full bg-sky-700 hover:bg-sky-800">
                   <Check className="h-4 w-4" />
-                  Event Candidate Reviewへ送る
+                  Event Candidate Reviewを開く
                 </Button>
               </div>
             ) : (
@@ -812,9 +638,8 @@ export default function AdminOCRTestPage() {
                   session,
                   aggregation,
                   canonical_event_candidate: canonicalCandidate,
-                  event_aggregate_candidate_for_review: editedReviewCandidate,
                   original_event_aggregate_candidate: reviewCandidate,
-                  review_prefill: buildReviewPrefill(editedReviewCandidate),
+                  draft_review: draftReview,
                   ocr_output: ocrOutput,
                 }}
               />

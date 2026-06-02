@@ -5,7 +5,10 @@ import Link from "next/link";
 import { CheckCircle2, ClipboardCopy, Edit3, ImageIcon, Plus, Trash2, XCircle } from "lucide-react";
 import {
   createEventCandidateReview,
+  listEventCandidateReviews,
+  updateEventCandidateReview,
   type EventCandidateReviewRead,
+  type EventCandidateReviewFinalStatus,
   type OCREvaluationEventAggregateCandidate,
   type OCREvaluationJobResponse,
   type OCREvaluationResultItem,
@@ -32,6 +35,7 @@ interface EventCandidateReviewSourceImage {
 
 interface EventCandidateReviewBundleItem {
   id: string;
+  review_id?: string | null;
   filename: string;
   source_id?: string | null;
   upload_session_id?: string | null;
@@ -155,6 +159,44 @@ function statusLabel(status: ReviewStatus) {
   return "pending";
 }
 
+function normalizeEventAggregateCandidate(value: Record<string, unknown>): OCREvaluationEventAggregateCandidate {
+  const candidate = value as unknown as OCREvaluationEventAggregateCandidate;
+  return {
+    candidate_type: candidate.candidate_type || "event_aggregate",
+    event_name: candidate.event_name ?? null,
+    event_date: candidate.event_date ?? null,
+    venue_name: candidate.venue_name ?? null,
+    open_time: candidate.open_time ?? null,
+    start_time: candidate.start_time ?? null,
+    group_candidates: Array.isArray(candidate.group_candidates) ? candidate.group_candidates : [],
+    source_event_info_candidate_ids: Array.isArray(candidate.source_event_info_candidate_ids) ? candidate.source_event_info_candidate_ids : [],
+    source_performer_association_ids: Array.isArray(candidate.source_performer_association_ids) ? candidate.source_performer_association_ids : [],
+    source_region_ids: Array.isArray(candidate.source_region_ids) ? candidate.source_region_ids : [],
+    source_node_ids: Array.isArray(candidate.source_node_ids) ? candidate.source_node_ids : [],
+    confidence: typeof candidate.confidence === "number" ? candidate.confidence : 0,
+    reasons: Array.isArray(candidate.reasons) ? candidate.reasons : [],
+  };
+}
+
+function reviewToBundleItem(review: EventCandidateReviewRead): EventCandidateReviewBundleItem {
+  const reviewJson = review.review_json as {
+    source_filename?: string;
+    source_images?: EventCandidateReviewSourceImage[];
+    review_prefill?: CandidateReviewEditedValues;
+  };
+  return {
+    id: review.id,
+    review_id: review.id,
+    filename: reviewJson.source_filename ?? review.id,
+    source_id: review.source_id,
+    upload_session_id: review.upload_session_id,
+    source_images: Array.isArray(reviewJson.source_images) ? reviewJson.source_images : [],
+    event_aggregate_candidate: normalizeEventAggregateCandidate(review.candidate_json),
+    ocr_output: review.ocr_output_json as CandidateReviewEditedValues,
+    review_prefill: reviewJson.review_prefill,
+  };
+}
+
 export default function EventCandidateReviewPage() {
   const [bundle, setBundle] = useState<EventCandidateReviewBundle | null>(null);
   const [reviewResults, setReviewResults] = useState<Record<string, CandidateReviewResult>>({});
@@ -167,15 +209,50 @@ export default function EventCandidateReviewPage() {
   const [groupNames, setGroupNames] = useState<string[]>([]);
   const [reviewerNote, setReviewerNote] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isLoadingDrafts, setIsLoadingDrafts] = useState(false);
   const [isSavingReview, setIsSavingReview] = useState(false);
   const [lastSavedReview, setLastSavedReview] = useState<EventCandidateReviewRead | null>(null);
 
   useEffect(() => {
-    const loadedBundle = loadJson<EventCandidateReviewBundle>(EVENT_CANDIDATE_REVIEW_BUNDLE_KEY);
-    const loadedResults = loadReviewResults();
-    setBundle(loadedBundle);
-    setReviewResults(loadedResults);
-    setSelectedId(loadedBundle?.items[0]?.id ?? null);
+    async function loadDrafts() {
+      setIsLoadingDrafts(true);
+      setLoadError(null);
+      const loadedResults = loadReviewResults();
+      setReviewResults(loadedResults);
+      try {
+        const pendingReviews = await listEventCandidateReviews({ limit: 200, review_status: "pending" });
+        if (pendingReviews.length > 0) {
+          const items = pendingReviews.map(reviewToBundleItem);
+          setBundle({
+            created_at: new Date().toISOString(),
+            summary: {
+              total: items.length,
+              success: items.length,
+              failed: 0,
+              source_kind_counts: { pending_review: items.length },
+              region_kind_counts: {},
+            },
+            items,
+          });
+          setSelectedId(items[0]?.id ?? null);
+          return;
+        }
+
+        const loadedBundle = loadJson<EventCandidateReviewBundle>(EVENT_CANDIDATE_REVIEW_BUNDLE_KEY);
+        setBundle(loadedBundle);
+        setSelectedId(loadedBundle?.items[0]?.id ?? null);
+      } catch (error) {
+        setLoadError(error instanceof Error ? error.message : "Review Draftの取得に失敗しました");
+        const loadedBundle = loadJson<EventCandidateReviewBundle>(EVENT_CANDIDATE_REVIEW_BUNDLE_KEY);
+        setBundle(loadedBundle);
+        setSelectedId(loadedBundle?.items[0]?.id ?? null);
+      } finally {
+        setIsLoadingDrafts(false);
+      }
+    }
+
+    loadDrafts();
   }, []);
 
   const selectedItem = useMemo(() => bundle?.items.find((item) => item.id === selectedId) ?? null, [bundle, selectedId]);
@@ -226,7 +303,7 @@ export default function EventCandidateReviewPage() {
     };
   }
 
-  async function saveReview(status: ReviewStatus) {
+  async function saveReview(status: EventCandidateReviewFinalStatus) {
     if (!selectedItem) return;
     setSaveError(null);
     setIsSavingReview(true);
@@ -235,26 +312,36 @@ export default function EventCandidateReviewPage() {
     const editedJson = formValues(eventName, eventDate, venueName, openTime, startTime, groupNames);
     let persistedReview: EventCandidateReviewRead | null = null;
     try {
-      persistedReview = await createEventCandidateReview({
-        candidate_type: selectedItem.event_aggregate_candidate.candidate_type || "event_aggregate",
-        source_id: selectedItem.source_id ?? null,
-        upload_session_id: selectedItem.upload_session_id ?? null,
-        candidate_json: selectedItem.event_aggregate_candidate as unknown as Record<string, unknown>,
-        original_json: originalJson as unknown as Record<string, unknown>,
-        edited_json: editedJson as unknown as Record<string, unknown>,
-        review_json: {
-          ...localReview,
-          source_filename: selectedItem.filename,
-          source_images: selectedItem.source_images.map((image) => ({
-            filename: image.filename,
-            source_kind: image.source_kind,
-            region_kinds: image.region_kinds,
-            image_features: image.image_features,
-          })),
-        },
-        review_status: status,
-        reviewer_note: localReview.reviewer_note || null,
-      });
+      const reviewJson = {
+        ...localReview,
+        source_filename: selectedItem.filename,
+        source_images: selectedItem.source_images.map((image) => ({
+          filename: image.filename,
+          source_kind: image.source_kind,
+          region_kinds: image.region_kinds,
+          image_features: image.image_features,
+        })),
+      };
+      if (selectedItem.review_id) {
+        persistedReview = await updateEventCandidateReview(selectedItem.review_id, {
+          edited_json: editedJson as unknown as Record<string, unknown>,
+          review_json: reviewJson,
+          review_status: status,
+          reviewer_note: localReview.reviewer_note || null,
+        });
+      } else {
+        persistedReview = await createEventCandidateReview({
+          candidate_type: selectedItem.event_aggregate_candidate.candidate_type || "event_aggregate",
+          source_id: selectedItem.source_id ?? null,
+          upload_session_id: selectedItem.upload_session_id ?? null,
+          candidate_json: selectedItem.event_aggregate_candidate as unknown as Record<string, unknown>,
+          original_json: originalJson as unknown as Record<string, unknown>,
+          edited_json: editedJson as unknown as Record<string, unknown>,
+          review_json: reviewJson,
+          review_status: status,
+          reviewer_note: localReview.reviewer_note || null,
+        });
+      }
       setLastSavedReview(persistedReview);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "レビュー結果のDB保存に失敗しました");
@@ -290,10 +377,14 @@ export default function EventCandidateReviewPage() {
   if (!bundle) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Event Candidate Review" subtitle="Upload Session から送られた EventAggregateCandidate をレビューします。" backHref="/admin" />
+        <PageHeader title="Event Candidate Review" subtitle="DBに保存されたpendingのEvent Candidate Draftを編集・レビューします。" backHref="/admin" />
         <Card className="space-y-3">
-          <p className="font-semibold text-slate-900">レビュー対象がありません</p>
-          <p className="text-sm text-slate-600">先に OCR Ground Truth でUpload Sessionを作成し、「Event Candidate Reviewへ送る」を押してください。</p>
+          <p className="font-semibold text-slate-900">{isLoadingDrafts ? "Review Draftを取得中です" : "レビュー対象がありません"}</p>
+          <p className="text-sm text-slate-600">
+            {loadError
+              ? loadError
+              : "スマホまたはPCで OCR Ground Truth から画像をアップロードすると、pendingのReview Draftがここに表示されます。"}
+          </p>
           <Link href="/admin/ocr-test" className="inline-flex h-10 items-center justify-center rounded-md bg-slate-900 px-4 text-sm font-semibold text-white">
             OCR Ground Truthへ
           </Link>
@@ -304,7 +395,7 @@ export default function EventCandidateReviewPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Event Candidate Review" subtitle="OCR Ground Truthで整えた候補を、ここでApprove/Edit/Rejectして教師データとしてDB保存します。Event Core登録はまだ行いません。" backHref="/admin" />
+      <PageHeader title="Event Candidate Review" subtitle="OCR Ground Truthで作成されたpending候補を、ここで編集してApprove/Edit/Rejectします。Event Core登録はまだ行いません。" backHref="/admin" />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Card className="p-4">
@@ -429,26 +520,61 @@ export default function EventCandidateReviewPage() {
                     <p className="font-semibold text-slate-900">レビュー編集</p>
                     <label className="space-y-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">event_name</span>
-                      <Input value={eventName} onChange={(event) => setEventName(event.currentTarget.value)} placeholder="イベント名" />
+                      <Input
+                        value={eventName}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          setEventName(value);
+                        }}
+                        placeholder="イベント名"
+                      />
                     </label>
                     <label className="space-y-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">event_date</span>
-                      <Input type="date" value={eventDate} onChange={(event) => setEventDate(event.currentTarget.value)} />
+                      <Input
+                        type="date"
+                        value={eventDate}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          setEventDate(value);
+                        }}
+                      />
                       <span className="text-[11px] text-slate-400">カレンダーから選択できます。</span>
                     </label>
                     <label className="space-y-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">venue_name</span>
-                      <Input value={venueName} onChange={(event) => setVenueName(event.currentTarget.value)} placeholder="会場名" />
+                      <Input
+                        value={venueName}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          setVenueName(value);
+                        }}
+                        placeholder="会場名"
+                      />
                     </label>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <label className="space-y-1">
                         <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">open_time</span>
-                        <Input type="time" value={openTime} onChange={(event) => setOpenTime(event.currentTarget.value)} />
+                        <Input
+                          type="time"
+                          value={openTime}
+                          onChange={(event) => {
+                            const value = event.currentTarget.value;
+                            setOpenTime(value);
+                          }}
+                        />
                         <span className="text-[11px] text-slate-400">時刻ピッカーで入力できます。</span>
                       </label>
                       <label className="space-y-1">
                         <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">start_time</span>
-                        <Input type="time" value={startTime} onChange={(event) => setStartTime(event.currentTarget.value)} />
+                        <Input
+                          type="time"
+                          value={startTime}
+                          onChange={(event) => {
+                            const value = event.currentTarget.value;
+                            setStartTime(value);
+                          }}
+                        />
                         <span className="text-[11px] text-slate-400">時刻ピッカーで入力できます。</span>
                       </label>
                     </div>
@@ -466,7 +592,10 @@ export default function EventCandidateReviewPage() {
                             <div key={`review-group-${index}`} className="flex gap-2">
                               <Input
                                 value={groupName}
-                                onChange={(event) => updateGroupName(index, event.currentTarget.value)}
+                                onChange={(event) => {
+                                  const value = event.currentTarget.value;
+                                  updateGroupName(index, value);
+                                }}
                                 placeholder={`グループ名 ${index + 1}`}
                               />
                               <Button
@@ -488,7 +617,14 @@ export default function EventCandidateReviewPage() {
                     </div>
                     <label className="space-y-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">reviewer_note</span>
-                      <Textarea value={reviewerNote} onChange={(event) => setReviewerNote(event.currentTarget.value)} placeholder="判断理由や修正メモ" />
+                      <Textarea
+                        value={reviewerNote}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          setReviewerNote(value);
+                        }}
+                        placeholder="判断理由や修正メモ"
+                      />
                     </label>
                     {saveError ? <p className="rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">{saveError}</p> : null}
                     {lastSavedReview?.id === reviewResults[selectedItem.id]?.persisted_review_id ? (
