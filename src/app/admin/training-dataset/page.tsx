@@ -95,6 +95,9 @@ export default function TrainingDatasetPage() {
     setIsRunning(true);
     try {
       const started = await createTrainingDatasetJob(files, { mode, sourceType });
+      if (!started.job_id?.trim()) {
+        throw new Error("アップロードAPIからジョブIDが返りませんでした。Backendのレスポンスを確認してください。");
+      }
       setJob(started);
       let currentJob = started;
       while (currentJob.status === "queued" || currentJob.status === "running") {

@@ -917,6 +917,9 @@ export function createTrainingDatasetJob(files: File[], options: { mode: Trainin
 }
 
 export function getTrainingDatasetJob(jobId: string) {
+  if (!jobId.trim()) {
+    throw new Error("Training DatasetジョブIDが空です。アップロードAPIのレスポンスを確認してください。");
+  }
   return apiFetch<TrainingDatasetJobRead>(`/admin/training-dataset/jobs/${jobId}`);
 }
 

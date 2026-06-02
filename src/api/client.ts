@@ -35,6 +35,27 @@ export function apiUrl(path: string, query?: ApiOptions["query"]) {
   return buildUrl(path, query);
 }
 
+function formatApiDetail(detail: unknown) {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (detail && typeof detail === "object") {
+    const value = detail as { detail?: unknown };
+    if (typeof value.detail === "string" && value.detail.trim()) return value.detail;
+    if (Array.isArray(value.detail)) {
+      const messages = value.detail
+        .map((item) => {
+          if (!item || typeof item !== "object") return "";
+          const entry = item as { msg?: unknown; loc?: unknown };
+          const location = Array.isArray(entry.loc) ? entry.loc.join(".") : "";
+          const message = typeof entry.msg === "string" ? entry.msg : "";
+          return [location, message].filter(Boolean).join(": ");
+        })
+        .filter(Boolean);
+      if (messages.length > 0) return messages.join(" / ");
+    }
+  }
+  return null;
+}
+
 export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
@@ -54,7 +75,8 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
     } catch {
       detail = await response.text();
     }
-    throw new ApiError(`API request failed: ${response.status}`, response.status, detail);
+    const detailMessage = formatApiDetail(detail);
+    throw new ApiError(detailMessage ? `API request failed: ${response.status} - ${detailMessage}` : `API request failed: ${response.status}`, response.status, detail);
   }
 
   if (response.status === 204) return undefined as T;
