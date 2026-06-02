@@ -258,6 +258,7 @@ export default function EventCandidateReviewPage() {
   const selectedItem = useMemo(() => bundle?.items.find((item) => item.id === selectedId) ?? null, [bundle, selectedId]);
   const selectedReview = selectedId ? reviewResults[selectedId] : undefined;
   const selectedStatus = selectedReview?.review_status ?? "pending";
+  const selectedPersistedReviewId = selectedReview?.persisted_review_id ?? null;
 
   useEffect(() => {
     if (!selectedItem) return;
@@ -627,9 +628,9 @@ export default function EventCandidateReviewPage() {
                       />
                     </label>
                     {saveError ? <p className="rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">{saveError}</p> : null}
-                    {lastSavedReview?.id === reviewResults[selectedItem.id]?.persisted_review_id ? (
+                    {selectedPersistedReviewId ? (
                       <p className="rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-700">
-                        DB保存済み: <span className="font-mono">{lastSavedReview.id}</span>
+                        DB保存済み: <span className="font-mono">{selectedPersistedReviewId}</span>
                       </p>
                     ) : null}
                     <div className="flex flex-wrap gap-2">
