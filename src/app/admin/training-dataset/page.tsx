@@ -43,7 +43,7 @@ function candidateSubline(candidate: TrainingEventCandidateRead): string {
 
 export default function TrainingDatasetPage() {
   const [mode, setMode] = useState<TrainingDatasetMode>("single");
-  const [sourceType, setSourceType] = useState("training_dataset");
+  const [sourceType, setSourceType] = useState("auto");
   const [files, setFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [job, setJob] = useState<TrainingDatasetJobRead | null>(null);
@@ -177,13 +177,16 @@ export default function TrainingDatasetPage() {
               onChange={(event) => setSourceType(event.target.value)}
               className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
             >
-              <option value="training_dataset">auto / training_dataset</option>
+              <option value="auto">auto（画像ごとに推定）</option>
               <option value="event_info">event_info</option>
               <option value="x_screenshot">x_screenshot</option>
               <option value="normal_timetable">normal_timetable</option>
               <option value="timetable">timetable</option>
               <option value="flyer">flyer</option>
             </select>
+            <span className="mt-2 block text-xs leading-relaxed text-slate-500">
+              autoではBackendが画像ごとにsource typeを推定します。手動選択した場合は、現状アップロード全体へのhintとして扱われます。
+            </span>
           </label>
 
           <label className="flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-6 text-center transition hover:border-slate-500">
@@ -252,7 +255,8 @@ export default function TrainingDatasetPage() {
                 </div>
                 <p className="mt-1 truncate text-xs text-slate-500">{candidateSubline(candidate) || "-"}</p>
                 <p className="mt-1 truncate text-xs text-slate-400">
-                  {candidate.single_multi} / {candidate.source_type ?? "-"} / {candidate.created_at}
+                  {candidate.single_multi} / predicted: {candidate.predicted_source_type ?? candidate.source_type ?? "-"} / hint:{" "}
+                  {candidate.source_type_hint ?? "-"}
                 </p>
               </Link>
             ))}

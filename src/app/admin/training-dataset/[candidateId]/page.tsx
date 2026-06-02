@@ -37,6 +37,7 @@ type SessionDraft = {
 };
 
 type GroundTruthForm = {
+  correct_source_type: string;
   event_name: string;
   event_date: string;
   venue_name: string;
@@ -45,6 +46,17 @@ type GroundTruthForm = {
   group_candidates: GroupCandidateDraft[];
   sessions: SessionDraft[];
 };
+
+const SOURCE_TYPE_OPTIONS = [
+  "event_info",
+  "x_screenshot",
+  "normal_timetable",
+  "timetable",
+  "schedule_document",
+  "meet_and_greet",
+  "flyer",
+  "other",
+];
 
 function toText(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -108,7 +120,14 @@ function normalizeSessions(value: unknown): SessionDraft[] {
 
 function buildForm(candidate: TrainingEventCandidateRead | null): GroundTruthForm {
   const source: Record<string, unknown> = candidate?.ground_truth_json ?? candidate?.prediction_json ?? {};
+  const groundTruth = candidate?.ground_truth_json ?? {};
+  const correctSourceType =
+    toText((groundTruth as Record<string, unknown>).correct_source_type) ||
+    candidate?.predicted_source_type ||
+    candidate?.source_type ||
+    "";
   return {
+    correct_source_type: correctSourceType,
     event_name: toText(source.event_name),
     event_date: toText(source.event_date),
     venue_name: toText(source.venue_name),
@@ -141,6 +160,7 @@ function benchmarkSummary(run: TrainingCandidateBenchmarkRunRead): string {
 
 function buildGroundTruthPayload(form: GroundTruthForm): Record<string, unknown> {
   return {
+    correct_source_type: form.correct_source_type || null,
     event_name: form.event_name.trim() || null,
     event_date: form.event_date || null,
     venue_name: form.venue_name.trim() || null,
@@ -209,6 +229,11 @@ export default function TrainingDatasetReviewPage() {
   const imageAssets = useMemo(() => {
     const values = candidate?.input_payload_json?.assets;
     return Array.isArray(values) ? values : [];
+  }, [candidate]);
+
+  const itemSourceTypes = useMemo(() => {
+    const values = candidate?.input_payload_json?.item_source_types;
+    return Array.isArray(values) ? values.map((item) => String(item ?? "")) : [];
   }, [candidate]);
 
   async function loadCandidate() {
@@ -433,7 +458,8 @@ export default function TrainingDatasetReviewPage() {
         <div>
           <p className="break-all font-mono text-xs text-slate-500">{candidate.id}</p>
           <p className="mt-1 text-sm text-slate-600">
-            {candidate.single_multi} / {candidate.source_type ?? "-"} / {candidate.review_status}
+            {candidate.single_multi} / predicted: {candidate.predicted_source_type ?? candidate.source_type ?? "-"} / hint:{" "}
+            {candidate.source_type_hint ?? "-"} / {candidate.review_status}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -453,17 +479,35 @@ export default function TrainingDatasetReviewPage() {
         <div className="grid min-w-0 gap-4 lg:grid-cols-2">
           <Card className="min-w-0 p-5">
             <h2 className="font-bold">Source Images</h2>
+            <div className="mt-2 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
+              <p>
+                <span className="font-bold">Predicted Source Type:</span> {candidate.predicted_source_type ?? candidate.source_type ?? "-"}
+              </p>
+              <p>
+                <span className="font-bold">Source Type Hint:</span> {candidate.source_type_hint ?? "-"}
+              </p>
+              {itemSourceTypes.length ? (
+                <p className="mt-1 break-words">
+                  <span className="font-bold">Image Types:</span> {itemSourceTypes.join(" / ")}
+                </p>
+              ) : null}
+            </div>
             {imageAssets.length ? (
               <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
                 {imageAssets.map((asset, index) => {
                   const assetId = getSourceAssetId(asset);
+                  const assetRecord = asset && typeof asset === "object" ? (asset as Record<string, unknown>) : {};
                   return assetId ? (
-                    <img
-                      key={assetId}
-                      src={apiUrl(`/admin/source-assets/${assetId}/image`)}
-                      alt={`source ${index + 1}`}
-                      className="aspect-square rounded-xl border border-slate-200 object-cover"
-                    />
+                    <div key={assetId} className="min-w-0">
+                      <img
+                        src={apiUrl(`/admin/source-assets/${assetId}/image`)}
+                        alt={`source ${index + 1}`}
+                        className="aspect-square rounded-xl border border-slate-200 object-cover"
+                      />
+                      <p className="mt-1 truncate text-[11px] font-bold text-slate-700">
+                        #{index + 1} {String(assetRecord.source_type ?? itemSourceTypes[index] ?? "-")}
+                      </p>
+                    </div>
                   ) : null;
                 })}
               </div>
@@ -495,13 +539,58 @@ export default function TrainingDatasetReviewPage() {
           <Card className="min-w-0 space-y-4 p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 className="font-bold">Event Candidate</h2>
-                <p className="mt-1 text-sm text-slate-500">値が見えるように、この画面ではフォームを広く取りました。</p>
+                <h2 className="font-bold">Source Type Review</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  分類器の教師データです。predicted_source_type と correct_source_type を分けて保存します。
+                </p>
               </div>
               <Button onClick={handleSaveGroundTruth} disabled={isSaving}>
                 {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                 Save Ground Truth
               </Button>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <label>
+                <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">predicted_source_type</span>
+                <input
+                  value={candidate.predicted_source_type ?? candidate.source_type ?? ""}
+                  readOnly
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500"
+                />
+              </label>
+              <label>
+                <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">correct_source_type</span>
+                <select
+                  value={form.correct_source_type}
+                  onChange={(event) => setForm((current) => ({ ...current, correct_source_type: event.target.value }))}
+                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                >
+                  <option value="">未設定</option>
+                  {SOURCE_TYPE_OPTIONS.map((sourceType) => (
+                    <option key={sourceType} value={sourceType}>
+                      {sourceType}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {jsonError ? <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{jsonError}</p> : null}
+            {saveMessage ? (
+              <p className="flex items-center gap-2 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700">
+                <CheckCircle2 className="h-4 w-4" />
+                {saveMessage}
+              </p>
+            ) : null}
+          </Card>
+
+          <Card className="min-w-0 space-y-4 p-5">
+            <div>
+              <h2 className="font-bold">Extraction Review</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                抽出器の教師データです。Event Candidate の値を確認し、人間が正解JSONとして修正します。
+              </p>
             </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
@@ -549,14 +638,6 @@ export default function TrainingDatasetReviewPage() {
                 />
               </label>
             </div>
-
-            {jsonError ? <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{jsonError}</p> : null}
-            {saveMessage ? (
-              <p className="flex items-center gap-2 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700">
-                <CheckCircle2 className="h-4 w-4" />
-                {saveMessage}
-              </p>
-            ) : null}
           </Card>
 
           <Card className="min-w-0 space-y-4 p-5">
