@@ -9,8 +9,19 @@ export type OCRBackendSuccess = {
     queue_wait_seconds?: number;
     active_ocr_count?: number;
     max_concurrent_ocr?: number;
+    timings?: {
+      file_save?: number;
+      queue_wait?: number;
+      ocr_subprocess?: number;
+      json_parse?: number;
+      total?: number;
+    };
     worker_id?: number;
     cpu_percent?: number;
+    cpu_percent_avg?: number;
+    cpu_percent_max?: number;
+    child_cpu_seconds?: number;
+    child_cpu_utilization_percent?: number;
     memory_percent?: number;
   };
 };

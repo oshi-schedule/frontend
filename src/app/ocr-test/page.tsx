@@ -13,6 +13,15 @@ import { Textarea } from "@/components/ui/textarea";
 const ACCEPT = ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp";
 
 
+function seconds(value: number | undefined, digits = 3) {
+  return typeof value === "number" ? `${value.toFixed(digits)} sec` : "-";
+}
+
+function percent(value: number | undefined) {
+  return typeof value === "number" ? `${value.toFixed(1)}%` : "-";
+}
+
+
 export default function OCRTestPage() {
   const [file, setFile] = useState<File | null>(null);
   const [rawText, setRawText] = useState("");
@@ -120,11 +129,11 @@ export default function OCRTestPage() {
             </div>
             <div>
               <dt className="text-[var(--muted)]">Elapsed</dt>
-              <dd className="font-semibold text-[var(--foreground)]">{result.data.elapsed_seconds.toFixed(2)} sec</dd>
+              <dd className="font-semibold text-[var(--foreground)]">{seconds(result.data.elapsed_seconds, 2)}</dd>
             </div>
             <div>
               <dt className="text-[var(--muted)]">Queue Wait</dt>
-              <dd className="font-semibold text-[var(--foreground)]">{(result.data.queue_wait_seconds ?? 0).toFixed(3)} sec</dd>
+              <dd className="font-semibold text-[var(--foreground)]">{seconds(result.data.queue_wait_seconds ?? 0)}</dd>
             </div>
             <div>
               <dt className="text-[var(--muted)]">Active OCR</dt>
@@ -133,16 +142,61 @@ export default function OCRTestPage() {
               </dd>
             </div>
             <div>
-              <dt className="text-[var(--muted)]">CPU</dt>
-              <dd className="font-semibold text-[var(--foreground)]">{result.data.cpu_percent?.toFixed(1) ?? "-"}%</dd>
+              <dt className="text-[var(--muted)]">CPU Avg</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{percent(result.data.cpu_percent_avg ?? result.data.cpu_percent)}</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">CPU Max</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{percent(result.data.cpu_percent_max)}</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">Child CPU</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{seconds(result.data.child_cpu_seconds)}</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">Child CPU Util</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{percent(result.data.child_cpu_utilization_percent)}</dd>
             </div>
             <div>
               <dt className="text-[var(--muted)]">Memory</dt>
-              <dd className="font-semibold text-[var(--foreground)]">{result.data.memory_percent?.toFixed(1) ?? "-"}%</dd>
+              <dd className="font-semibold text-[var(--foreground)]">{percent(result.data.memory_percent)}</dd>
             </div>
           </dl>
         ) : (
           <p className="text-sm text-[var(--muted)]">OCR実行後に専用VMのメトリクスが表示されます。</p>
+        )}
+      </Card>
+
+      <Card className="space-y-4">
+        <div>
+          <h2 className="text-base font-semibold">Timing Breakdown</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">OCR専用VM内の処理時間を段階別に表示します。</p>
+        </div>
+        {result ? (
+          <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
+            <div>
+              <dt className="text-[var(--muted)]">File Save</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{seconds(result.data.timings?.file_save)}</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">Queue Wait</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{seconds(result.data.timings?.queue_wait)}</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">OCR Subprocess</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{seconds(result.data.timings?.ocr_subprocess)}</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">JSON Parse</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{seconds(result.data.timings?.json_parse)}</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">Total</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{seconds(result.data.timings?.total)}</dd>
+            </div>
+          </dl>
+        ) : (
+          <p className="text-sm text-[var(--muted)]">OCR実行後に処理時間の内訳が表示されます。</p>
         )}
       </Card>
 
