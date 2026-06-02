@@ -80,6 +80,7 @@ export default function AdminDashboardPage() {
           { href: "/admin/event-candidate-review", label: "Event Candidate Review", desc: "OCR由来のイベント候補を採用・修正・却下" },
           { href: "/admin/event-candidate-reviews", label: "教師データ分析", desc: "レビュー件数と項目別修正率からOCRの弱点を確認" },
           { href: "/admin/ocr-evaluation", label: "OCR Evaluation Lab", desc: "100枚までのSourceKind / LayoutGraph一括評価。教師データ入口ではありません" },
+          { href: "/admin/vision-structure-test", label: "Vision Structure Test", desc: "GPT Visionのcontainer / session構造を観測して保存" },
         ].map(({ href, label, desc }) => (
           <Link key={href} href={href}>
             <Card className="p-4 hover:shadow-md transition-shadow cursor-pointer h-full">

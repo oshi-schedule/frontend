@@ -282,6 +282,32 @@ export interface OCRVisionEvaluationRun {
   updated_at: string;
 }
 
+export interface VisionEventStructureTestRequest {
+  image_data_url: string;
+  source_asset_id?: string | null;
+  source_type?: string | null;
+  model_name?: string | null;
+}
+
+export interface VisionEventStructureTestResponse {
+  success: boolean;
+  candidate_id: string;
+  created_at: string;
+  model_name: string;
+  prompt_version: string;
+  candidate: {
+    event?: Record<string, unknown>;
+    containers?: Array<Record<string, unknown>>;
+    sessions?: Array<Record<string, unknown>>;
+    warnings?: string[];
+    [key: string]: unknown;
+  };
+  raw_model_output: Record<string, unknown>;
+  execution_metadata: Record<string, unknown>;
+  image_hash: string;
+  error: string | null;
+}
+
 export interface OCRTimetableReviewRevision {
   id: string;
   session_id: string;
@@ -732,5 +758,12 @@ export function updateOCRVisionEvaluationHumanScore(runId: string, humanScore: n
   return apiFetch<OCRVisionEvaluationRun>(`/admin/ocr-vision-evaluation-runs/${runId}/human-score`, {
     method: "PATCH",
     body: JSON.stringify({ human_score: humanScore }),
+  });
+}
+
+export function runVisionEventStructureTest(payload: VisionEventStructureTestRequest) {
+  return apiFetch<VisionEventStructureTestResponse>("/admin/vision-structure-test", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
