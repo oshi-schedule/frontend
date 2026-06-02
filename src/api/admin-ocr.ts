@@ -319,6 +319,8 @@ export interface TrainingEventCandidateRead {
   source_type: string | null;
   source_type_hint?: string | null;
   predicted_source_type?: string | null;
+  processing_route?: string | null;
+  extraction_plan?: Record<string, unknown> | null;
   single_multi: TrainingDatasetMode | string;
   input_payload_json: Record<string, unknown>;
   prediction_json: Record<string, unknown>;
@@ -410,11 +412,21 @@ export interface TrainingDatasetStats {
     confusion_matrix?: Record<string, Record<string, number>>;
     mismatches?: Array<Record<string, unknown>>;
   };
+  item_source_type_review_stats: {
+    reviewed_count?: number;
+    correct_count?: number;
+    accuracy?: number;
+    predicted_counts?: Record<string, number>;
+    correct_counts?: Record<string, number>;
+    confusion_matrix?: Record<string, Record<string, number>>;
+    mismatches?: Array<Record<string, unknown>>;
+  };
   session_linked_reviews: number;
   unlinked_reviews: number;
   single_image_sessions: number;
   multi_image_sessions: number;
   source_type_counts: Record<string, number>;
+  processing_route_counts: Record<string, number>;
   mode_counts: Record<string, number>;
 }
 

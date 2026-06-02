@@ -36,8 +36,16 @@ type SessionDraft = {
   note: string;
 };
 
+type ItemSourceTypeDraft = {
+  source_asset_id: string;
+  filename: string;
+  predicted_source_type: string;
+  correct_source_type: string;
+};
+
 type GroundTruthForm = {
   correct_source_type: string;
+  correct_item_source_types: ItemSourceTypeDraft[];
   event_name: string;
   event_date: string;
   venue_name: string;
@@ -70,6 +78,12 @@ function getSourceAssetId(asset: unknown): string | null {
   if (!asset || typeof asset !== "object") return null;
   const value = (asset as Record<string, unknown>).source_asset_id;
   return typeof value === "string" && value ? value : null;
+}
+
+function getStringField(value: unknown, field: string): string {
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  return typeof record[field] === "string" ? record[field] : "";
 }
 
 function normalizeGroupCandidates(value: unknown): GroupCandidateDraft[] {
@@ -118,6 +132,35 @@ function normalizeSessions(value: unknown): SessionDraft[] {
   });
 }
 
+function buildItemSourceTypeDrafts(candidate: TrainingEventCandidateRead | null): ItemSourceTypeDraft[] {
+  const assets = Array.isArray(candidate?.input_payload_json?.assets) ? candidate.input_payload_json.assets : [];
+  const itemSourceTypes = Array.isArray(candidate?.input_payload_json?.item_source_types)
+    ? candidate.input_payload_json.item_source_types.map((item) => String(item ?? ""))
+    : [];
+  const existing = Array.isArray(candidate?.ground_truth_json?.correct_item_source_types)
+    ? candidate.ground_truth_json.correct_item_source_types
+    : [];
+  const existingByAssetId = new Map<string, string>();
+  existing.forEach((item) => {
+    if (!item || typeof item !== "object") return;
+    const record = item as Record<string, unknown>;
+    const assetId = typeof record.source_asset_id === "string" ? record.source_asset_id : "";
+    const correct = typeof record.correct_source_type === "string" ? record.correct_source_type : "";
+    if (assetId && correct) existingByAssetId.set(assetId, correct);
+  });
+
+  return assets.map((asset, index) => {
+    const sourceAssetId = getSourceAssetId(asset) ?? "";
+    const predicted = getStringField(asset, "source_type") || itemSourceTypes[index] || "";
+    return {
+      source_asset_id: sourceAssetId,
+      filename: getStringField(asset, "filename") || `image_${index + 1}`,
+      predicted_source_type: predicted,
+      correct_source_type: existingByAssetId.get(sourceAssetId) || predicted,
+    };
+  });
+}
+
 function buildForm(candidate: TrainingEventCandidateRead | null): GroundTruthForm {
   const source: Record<string, unknown> = candidate?.ground_truth_json ?? candidate?.prediction_json ?? {};
   const groundTruth = candidate?.ground_truth_json ?? {};
@@ -128,6 +171,7 @@ function buildForm(candidate: TrainingEventCandidateRead | null): GroundTruthFor
     "";
   return {
     correct_source_type: correctSourceType,
+    correct_item_source_types: buildItemSourceTypeDrafts(candidate),
     event_name: toText(source.event_name),
     event_date: toText(source.event_date),
     venue_name: toText(source.venue_name),
@@ -160,7 +204,12 @@ function benchmarkSummary(run: TrainingCandidateBenchmarkRunRead): string {
 
 function buildGroundTruthPayload(form: GroundTruthForm): Record<string, unknown> {
   return {
-    correct_source_type: form.correct_source_type || null,
+    correct_item_source_types: form.correct_item_source_types.map((item) => ({
+      source_asset_id: item.source_asset_id || null,
+      filename: item.filename || null,
+      predicted_source_type: item.predicted_source_type || null,
+      correct_source_type: item.correct_source_type || null,
+    })),
     event_name: form.event_name.trim() || null,
     event_date: form.event_date || null,
     venue_name: form.venue_name.trim() || null,
@@ -270,6 +319,15 @@ export default function TrainingDatasetReviewPage() {
     setForm((current) => ({
       ...current,
       group_candidates: current.group_candidates.filter((_, currentIndex) => currentIndex !== index),
+    }));
+  }
+
+  function updateItemSourceType(index: number, correctSourceType: string) {
+    setForm((current) => ({
+      ...current,
+      correct_item_source_types: current.correct_item_source_types.map((item, currentIndex) =>
+        currentIndex === index ? { ...item, correct_source_type: correctSourceType } : item,
+      ),
     }));
   }
 
@@ -458,7 +516,7 @@ export default function TrainingDatasetReviewPage() {
         <div>
           <p className="break-all font-mono text-xs text-slate-500">{candidate.id}</p>
           <p className="mt-1 text-sm text-slate-600">
-            {candidate.single_multi} / predicted: {candidate.predicted_source_type ?? candidate.source_type ?? "-"} / hint:{" "}
+            {candidate.single_multi} / route: {candidate.processing_route ?? String(candidate.input_payload_json?.processing_route ?? candidate.input_payload_json?.selected_route ?? "-")} / hint:{" "}
             {candidate.source_type_hint ?? "-"} / {candidate.review_status}
           </p>
         </div>
@@ -481,7 +539,8 @@ export default function TrainingDatasetReviewPage() {
             <h2 className="font-bold">Source Images</h2>
             <div className="mt-2 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
               <p>
-                <span className="font-bold">Predicted Source Type:</span> {candidate.predicted_source_type ?? candidate.source_type ?? "-"}
+                <span className="font-bold">Processing Route:</span>{" "}
+                {candidate.processing_route ?? String(candidate.input_payload_json?.processing_route ?? candidate.input_payload_json?.selected_route ?? "-")}
               </p>
               <p>
                 <span className="font-bold">Source Type Hint:</span> {candidate.source_type_hint ?? "-"}
@@ -505,7 +564,10 @@ export default function TrainingDatasetReviewPage() {
                         className="aspect-square rounded-xl border border-slate-200 object-cover"
                       />
                       <p className="mt-1 truncate text-[11px] font-bold text-slate-700">
-                        #{index + 1} {String(assetRecord.source_type ?? itemSourceTypes[index] ?? "-")}
+                        #{index + 1} predicted: {String(assetRecord.source_type ?? itemSourceTypes[index] ?? "-")}
+                      </p>
+                      <p className="mt-1 truncate text-[11px] text-emerald-700">
+                        correct: {form.correct_item_source_types[index]?.correct_source_type || "-"}
                       </p>
                     </div>
                   ) : null;
@@ -536,12 +598,36 @@ export default function TrainingDatasetReviewPage() {
         </div>
 
         <div className="space-y-4">
+          <Card className="min-w-0 space-y-3 p-5">
+            <div>
+              <h2 className="font-bold">Extraction Plan</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Session全体は source_type ではなく、画像ごとの分類結果から選ばれた処理戦略として扱います。
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-xl bg-slate-50 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">processing_route</p>
+                <p className="mt-1 font-mono text-sm font-bold text-slate-900">
+                  {candidate.processing_route ?? String(candidate.input_payload_json?.processing_route ?? candidate.input_payload_json?.selected_route ?? "-")}
+                </p>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">legacy predicted_source_type</p>
+                <p className="mt-1 font-mono text-sm text-slate-600">{candidate.predicted_source_type ?? candidate.source_type ?? "-"}</p>
+              </div>
+            </div>
+            <pre className="max-h-72 overflow-auto rounded-xl border border-slate-200 bg-slate-950 p-3 text-xs text-slate-100">
+              {JSON.stringify(candidate.extraction_plan ?? candidate.input_payload_json?.extraction_plan ?? {}, null, 2)}
+            </pre>
+          </Card>
+
           <Card className="min-w-0 space-y-4 p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 className="font-bold">Source Type Review</h2>
+                <h2 className="font-bold">Image Source Type Review</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  分類器の教師データです。predicted_source_type と correct_source_type を分けて保存します。
+                  画像ごとの分類器教師データです。Session全体の処理戦略とは分けて保存します。
                 </p>
               </div>
               <Button onClick={handleSaveGroundTruth} disabled={isSaving}>
@@ -550,30 +636,44 @@ export default function TrainingDatasetReviewPage() {
               </Button>
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-2">
-              <label>
-                <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">predicted_source_type</span>
-                <input
-                  value={candidate.predicted_source_type ?? candidate.source_type ?? ""}
-                  readOnly
-                  className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500"
-                />
-              </label>
-              <label>
-                <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">correct_source_type</span>
-                <select
-                  value={form.correct_source_type}
-                  onChange={(event) => setForm((current) => ({ ...current, correct_source_type: event.target.value }))}
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                >
-                  <option value="">未設定</option>
-                  {SOURCE_TYPE_OPTIONS.map((sourceType) => (
-                    <option key={sourceType} value={sourceType}>
-                      {sourceType}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <h3 className="font-bold">Image Source Type Labels</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                multi画像では、画像ごとの分類器教師データとして predicted / correct を保存します。
+              </p>
+              <div className="mt-3 space-y-3">
+                {form.correct_item_source_types.map((item, index) => (
+                  <div key={`${item.source_asset_id}-${index}`} className="grid gap-2 rounded-xl bg-slate-50 p-3 md:grid-cols-[80px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] md:items-center">
+                    <p className="font-mono text-xs font-bold text-slate-500">#{index + 1}</p>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">asset</p>
+                      <p className="truncate font-mono text-xs text-slate-600">{item.source_asset_id || item.filename || "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">predicted</p>
+                      <p className="mt-1 rounded-lg bg-white px-3 py-2 font-mono text-xs text-slate-700">{item.predicted_source_type || "-"}</p>
+                    </div>
+                    <label>
+                      <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">correct</span>
+                      <select
+                        value={item.correct_source_type}
+                        onChange={(event) => updateItemSourceType(index, event.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="">未設定</option>
+                        {SOURCE_TYPE_OPTIONS.map((sourceType) => (
+                          <option key={sourceType} value={sourceType}>
+                            {sourceType}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                ))}
+                {form.correct_item_source_types.length === 0 ? (
+                  <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">画像ごとのsource type情報はありません。</p>
+                ) : null}
+              </div>
             </div>
 
             {jsonError ? <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{jsonError}</p> : null}
