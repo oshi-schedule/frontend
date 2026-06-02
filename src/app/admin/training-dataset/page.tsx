@@ -122,7 +122,7 @@ export default function TrainingDatasetPage() {
     <div className="space-y-6">
       <PageHeader
         title="Event Candidate Labeling"
-        description="Sourceをアップロードして EventCandidate を作成します。編集レビューは候補詳細ページで行います。"
+        subtitle="Sourceをアップロードして EventCandidate を作成します。編集レビューは候補詳細ページで行います。"
       />
 
       <div className="grid gap-3 lg:grid-cols-2">
