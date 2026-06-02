@@ -183,6 +183,9 @@ export interface OCRCanonicalEventCandidate {
   meet_and_greet_sessions: Array<Record<string, unknown>>;
   source_asset_ids: string[];
   parsing_result_ids: string[];
+  candidate_generation_method?: string | null;
+  candidate_model?: string | null;
+  candidate_version?: string | null;
 }
 
 export interface OCRUploadSessionStructuredResult {
