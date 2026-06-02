@@ -1,1629 +1,646 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, Check, ClipboardCopy, Copy as CopyIcon, ImageIcon, Loader2, Plus, ScanSearch, Trash2 } from "lucide-react";
+import { Check, ClipboardCopy, ImageIcon, Loader2, ScanSearch } from "lucide-react";
 import { ApiError } from "@/api/client";
 import {
-  confirmOCRUploadSessionEventCore,
-  runOCRVisionEvaluation,
-  saveOCRUploadSessionTimetableReview,
-  saveOCRUploadSessionReview,
-  updateOCRVisionEvaluationHumanScore,
-  reparseSourceForOCRTest,
-  saveOCRTestGroundTruth,
+  getOCRReparseJob,
+  startOCRReparseJob,
   uploadSourceForOCRTest,
-  type OCRTestSourceType,
+  type OCREvaluationEventAggregateCandidate,
   type OCRTestWorkflowResponse,
-  type OCRUploadSessionConfirmEventCorePayload,
-  type OCRTimetableScheduleItem,
-  type SourceTypeAudit,
 } from "@/api/admin-ocr";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 
 const ACCEPT = ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp";
+const MAX_UPLOAD_FILES = 4;
+const EVENT_CANDIDATE_REVIEW_BUNDLE_KEY = "oshi_sche_event_candidate_review_bundle";
+const REPARSE_JOB_POLL_INTERVAL_MS = 1500;
 
-const SOURCE_TYPE_OPTIONS: Array<{ value: OCRTestSourceType; label: string }> = [
-  { value: "flyer", label: "flyer" },
-  { value: "timetable", label: "timetable" },
-  { value: "meet_and_greet", label: "meet_and_greet" },
-  { value: "x_post", label: "x_post" },
-  { value: "other", label: "other" },
+type SourceImagePreview = {
+  filename: string;
+  source_kind: string;
+  region_kinds: string[];
+  image_data_url?: string;
+  image_features: Record<string, unknown> | null;
+};
+
+type ProcessingStepKey = "upload" | "ocr" | "aggregation" | "candidate";
+
+const PROCESSING_STEPS: Array<{ key: ProcessingStepKey; label: string; description: string }> = [
+  { key: "upload", label: "画像保存", description: "ローカル保存とSource作成" },
+  { key: "ocr", label: "OCR実行", description: "NDLOCR / 画像ごとの構造化" },
+  { key: "aggregation", label: "Session集約", description: "Upload Session単位の候補集約" },
+  { key: "candidate", label: "Review候補準備", description: "Ground Truthレビュー用候補の作成" },
 ];
 
-const VISION_EVALUATION_MODELS = ["gpt-4o", "gpt-5-mini", "gpt-5"] as const;
-
-interface GroundTruthFormState {
-  event_name: string;
-  event_date: string;
-  venue_name: string;
+function formatPercent(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  return `${Math.round(value * 100)}%`;
 }
 
-interface ReviewFormState {
-  event_name: string;
-  event_date: string;
-  venue_name: string;
+function formatMs(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  return `${value.toLocaleString()} ms`;
 }
 
-type TimetableEditItem = OCRTimetableScheduleItem & { client_id: string };
-
-interface BBoxCandidate {
-  bbox: {
-    x_min: number;
-    y_min: number;
-    x_max: number;
-    y_max: number;
-  };
-  confidence?: number;
-  reasons?: string[];
+function JsonBlock({ value }: { value: unknown }) {
+  return (
+    <pre className="max-h-[520px] overflow-auto rounded-lg bg-slate-950 p-4 text-xs leading-relaxed text-slate-100">
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  );
 }
 
-function createEmptyGroundTruthForm(): GroundTruthFormState {
-  return {
-    event_name: "",
-    event_date: "",
-    venue_name: "",
-  };
-}
-
-function createEmptyTimetableItem(itemKind: "live" | "meet_and_greet"): TimetableEditItem {
-  return {
-    client_id: crypto.randomUUID(),
-    item_kind: itemKind,
-    title: "",
-    performer_name: "",
-    stage_name: "",
-    booth_name: "",
-    start_time: "",
-    end_time: "",
-    confidence: null,
-  };
-}
-
-function createEmptyReviewForm(): ReviewFormState {
-  return {
-    event_name: "",
-    event_date: "",
-    venue_name: "",
-  };
-}
-
-function normalizeSourceType(value: string | null | undefined): OCRTestSourceType | "" {
-  if (!value) return "";
-  if (value === "flyer" || value === "schedule_document" || value === "timetable" || value === "meet_and_greet" || value === "x_post" || value === "other") return value;
-  return "";
-}
-
-function displaySourceType(value: string | null | undefined): string {
-  return normalizeSourceType(value) || value || "-";
-}
-
-function asNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function getAttachedImageCandidates(sourceKind: Record<string, unknown> | null | undefined): BBoxCandidate[] {
-  const candidates = sourceKind?.attached_image_candidates;
-  if (!Array.isArray(candidates)) return [];
-  return candidates.flatMap((candidate) => {
-    if (!candidate || typeof candidate !== "object") return [];
-    const item = candidate as Record<string, unknown>;
-    const bbox = item.bbox;
-    if (!bbox || typeof bbox !== "object") return [];
-    const bboxItem = bbox as Record<string, unknown>;
-    const xMin = asNumber(bboxItem.x_min);
-    const yMin = asNumber(bboxItem.y_min);
-    const xMax = asNumber(bboxItem.x_max);
-    const yMax = asNumber(bboxItem.y_max);
-    if (xMin === null || yMin === null || xMax === null || yMax === null) return [];
-    return [
-      {
-        bbox: {
-          x_min: xMin,
-          y_min: yMin,
-          x_max: xMax,
-          y_max: yMax,
-        },
-        confidence: asNumber(item.confidence) ?? undefined,
-        reasons: Array.isArray(item.reasons) ? item.reasons.filter((reason): reason is string => typeof reason === "string") : [],
-      },
-    ];
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("画像の読み込みに失敗しました"));
+    reader.readAsDataURL(file);
   });
 }
 
-function normalizeEditableSourceType(value: string | null | undefined): OCRTestSourceType | "" {
-  if (value === "schedule_document") return "timetable";
-  return normalizeSourceType(value);
+function pickCanonicalCandidate(result: OCRTestWorkflowResponse | null) {
+  const session = result?.result.session ?? result?.result.parsed.session ?? null;
+  return (
+    session?.event_core_resolution?.canonical_event_candidate ??
+    session?.canonical_event_candidate ??
+    session?.decision ??
+    session?.aggregation?.canonical_event_candidate ??
+    null
+  );
 }
 
-function buildGroundTruthForm(result: OCRTestWorkflowResponse | null): GroundTruthFormState {
-  const groundTruth = result?.result.ground_truth;
-  const llmExtraction = result?.result.parsed.llm_extraction;
-  const extracted = result?.result.parsed.event;
-  return {
-    event_name: groundTruth?.event_name ?? llmExtraction?.event_name ?? extracted?.display_name ?? "",
-    event_date: groundTruth?.event_date ?? llmExtraction?.event_date ?? extracted?.event_date ?? "",
-    venue_name: groundTruth?.venue_name ?? llmExtraction?.venue_name ?? extracted?.venue_name ?? "",
-  };
-}
-
-function buildReviewForm(result: OCRTestWorkflowResponse | null): ReviewFormState {
-  const revision = result?.result.session?.latest_revision;
-  const canonical = result?.result.session?.canonical_event_candidate ?? result?.result.parsed.session?.canonical_event_candidate ?? null;
-  const source = revision?.human_reviewed_result ?? canonical;
-  return {
-    event_name: source?.event_name ?? "",
-    event_date: source?.event_date ?? "",
-    venue_name: source?.venue_name ?? "",
-  };
-}
-
-function toEditItems(items: OCRTimetableScheduleItem[] | undefined, itemKind: "live" | "meet_and_greet"): TimetableEditItem[] {
-  return (items ?? []).map((item) => ({
-    ...item,
-    item_kind: itemKind,
-    client_id: item.id ?? item.source_schedule_item_id ?? crypto.randomUUID(),
-    title: item.title ?? "",
-    performer_name: item.performer_name ?? "",
-    stage_name: item.stage_name ?? "",
-    booth_name: item.booth_name ?? "",
-    start_time: item.start_time ?? "",
-    end_time: item.end_time ?? "",
-  }));
-}
-
-function buildTimetableReviewState(result: OCRTestWorkflowResponse | null): {
-  live_sessions: TimetableEditItem[];
-  meet_and_greet_sessions: TimetableEditItem[];
-} {
-  const latest = result?.result.session?.timetable_review?.latest_revision;
-  if (latest) {
-    const reviewed = latest.human_reviewed_result.live_sessions.length || latest.human_reviewed_result.meet_and_greet_sessions.length
-      ? latest.human_reviewed_result
-      : latest.final_result;
+function buildEventAggregateCandidate(result: OCRTestWorkflowResponse | null): OCREvaluationEventAggregateCandidate | null {
+  if (!result) return null;
+  const canonical = pickCanonicalCandidate(result);
+  if (canonical) {
     return {
-      live_sessions: toEditItems(reviewed.live_sessions, "live"),
-      meet_and_greet_sessions: toEditItems(reviewed.meet_and_greet_sessions, "meet_and_greet"),
+      candidate_type: "event_aggregate",
+      event_name: canonical.event_name,
+      event_date: canonical.event_date,
+      venue_name: canonical.venue_name,
+      open_time: null,
+      start_time: null,
+      group_candidates: [],
+      source_event_info_candidate_ids: [],
+      source_performer_association_ids: [],
+      source_region_ids: canonical.source_asset_ids ?? [],
+      source_node_ids: canonical.parsing_result_ids ?? [],
+      confidence: canonical.confidence ?? 0,
+      reasons: canonical.reasons ?? [],
     };
   }
-  const extractions = result?.result.session?.vision_structure_extractions ?? [];
+
+  const session = getSession(result);
+  const parsedEvent = result.result.parsed.event;
+  const llmExtraction = result.result.parsed.llm_extraction;
+
   return {
-    live_sessions: toEditItems(extractions.flatMap((extraction) => extraction.live_sessions), "live"),
-    meet_and_greet_sessions: toEditItems(extractions.flatMap((extraction) => extraction.meet_and_greet_sessions), "meet_and_greet"),
+    candidate_type: "event_aggregate",
+    event_name: session?.event_name ?? parsedEvent?.display_name ?? llmExtraction?.event_name ?? null,
+    event_date: session?.event_date ?? parsedEvent?.event_date ?? llmExtraction?.event_date ?? null,
+    venue_name: session?.venue_name ?? parsedEvent?.venue_name ?? llmExtraction?.venue_name ?? null,
+    open_time: null,
+    start_time: null,
+    group_candidates: [],
+    source_event_info_candidate_ids: [],
+    source_performer_association_ids: [],
+    source_region_ids: result.result.assets
+      .map((asset) => asset.source_asset_id ?? asset.asset_id)
+      .filter((id): id is string => Boolean(id)),
+    source_node_ids: result.result.parsing_result_ids ?? [],
+    confidence: 0,
+    reasons: [
+      "canonical_event_candidate_not_generated",
+      "manual_ground_truth_review_required",
+    ],
   };
 }
 
-function toReviewPayload(items: TimetableEditItem[]): OCRTimetableScheduleItem[] {
-  return items.map(({ client_id: _clientId, ...item }) => ({
-    ...item,
-    title: item.title?.trim() || null,
-    performer_name: item.performer_name?.trim() || null,
-    stage_name: item.stage_name?.trim() || null,
-    booth_name: item.booth_name?.trim() || null,
-    start_time: item.start_time || null,
-    end_time: item.end_time || null,
-  }));
+function buildOcrOutput(candidate: OCREvaluationEventAggregateCandidate | null): Record<string, unknown> {
+  return {
+    event_name: candidate?.event_name ?? null,
+    event_date: candidate?.event_date ?? null,
+    venue_name: candidate?.venue_name ?? null,
+    open_time: candidate?.open_time ?? null,
+    start_time: candidate?.start_time ?? null,
+    group_candidates: candidate?.group_candidates ?? [],
+  };
 }
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  function handleCopy() {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }
-
-  return (
-    <button
-      onClick={handleCopy}
-      title="コピー"
-      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-    >
-      {copied ? (
-        <>
-          <Check size={13} className="text-emerald-500" />
-          <span className="text-emerald-500">Copied</span>
-        </>
-      ) : (
-        <ClipboardCopy size={13} />
-      )}
-    </button>
-  );
-}
-
-function JsonView({ value }: { value: unknown }) {
-  return <pre className="overflow-x-auto rounded-md bg-[#f8fafc] p-3 text-xs leading-6 text-slate-700">{JSON.stringify(value, null, 2)}</pre>;
-}
-
-function CardHeader({ title, copyText }: { title: string; copyText?: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <h2 className="text-base font-semibold">{title}</h2>
-      {copyText !== undefined && copyText !== "" && <CopyButton text={copyText} />}
-    </div>
-  );
-}
-
-function SourceTypeAuditView({ value }: { value: SourceTypeAudit | null | undefined }) {
-  if (!value) {
-    return <p className="text-sm text-slate-500">source_type_audit はまだありません。</p>;
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-md border border-[var(--border)] bg-white px-3 py-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">LLM 判定</p>
-          <p className="mt-1 font-mono text-sm font-semibold text-indigo-700">{displaySourceType(value.llm_source_type)}</p>
-        </div>
-        <div className="rounded-md border border-[var(--border)] bg-white px-3 py-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Rule 判定</p>
-          <p className="mt-1 font-mono text-sm font-semibold text-slate-900">{displaySourceType(value.rule_source_type)}</p>
-          <p className="text-xs text-slate-500">confidence: {value.rule_confidence.toFixed(3)}</p>
-        </div>
-        <div className="rounded-md border border-[var(--border)] bg-white px-3 py-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-            判定一致{" "}
-            {value.conflict ? (
-              <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-xs font-semibold text-red-700">CONFLICT</span>
-            ) : (
-              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-xs font-semibold text-emerald-700">OK</span>
-            )}
-          </p>
-          <p className="mt-1 text-xs text-slate-500">score_gap: {value.score_gap.toFixed(3)}</p>
-        </div>
-      </div>
-
-      <div>
-        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Top Candidates</p>
-        <div className="overflow-x-auto rounded-md border border-[var(--border)]">
-          <table className="min-w-full divide-y divide-[var(--border)] text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-3 py-2">source_type</th>
-                <th className="px-3 py-2">score</th>
-                <th className="px-3 py-2">bar</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--border)] bg-white">
-              {value.top_candidates.map((c) => (
-                <tr
-                  key={c.source_type}
-                  className={normalizeSourceType(c.source_type) === normalizeSourceType(value.llm_source_type) ? "bg-indigo-50" : ""}
-                >
-                  <td className="px-3 py-2 font-mono font-medium text-slate-900">
-                    {displaySourceType(c.source_type)}
-                    {normalizeSourceType(c.source_type) === normalizeSourceType(value.llm_source_type) && (
-                      <span className="ml-1 text-xs text-indigo-500">← LLM</span>
-                    )}
-                    {normalizeSourceType(c.source_type) === normalizeSourceType(value.rule_source_type) &&
-                      normalizeSourceType(c.source_type) !== normalizeSourceType(value.llm_source_type) && (
-                      <span className="ml-1 text-xs text-amber-600">← Rule</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-slate-700">{c.score.toFixed(3)}</td>
-                  <td className="px-3 py-2">
-                    <div className="h-2 w-32 rounded-full bg-slate-100">
-                      <div className="h-2 rounded-full bg-indigo-400" style={{ width: `${Math.round(c.score * 100)}%` }} />
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div>
-        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Signals</p>
-        {Object.keys(value.signals).length === 0 ? (
-          <p className="text-sm text-slate-500">シグナルなし</p>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {Object.entries(value.signals).map(([key, score]) => (
-              <span
-                key={key}
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-xs ${
-                  score < 0 ? "bg-red-50 text-red-700" : "bg-slate-100 text-slate-700"
-                }`}
-              >
-                {key}
-                <span className="font-semibold">{score > 0 ? `+${score}` : score}</span>
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function AttachedImageCandidateOverlay({
-  imageUrl,
-  imageWidth,
-  imageHeight,
-  candidates,
-}: {
-  imageUrl: string | undefined;
-  imageWidth: number | undefined;
-  imageHeight: number | undefined;
-  candidates: BBoxCandidate[];
-}) {
-  if (!imageUrl || !imageWidth || !imageHeight) {
-    return <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">プレビュー画像がありません。</p>;
-  }
-  if (!candidates.length) {
-    return <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">attached_image_candidate はありません。</p>;
-  }
-  return (
-    <div className="space-y-2">
-      <div className="relative inline-block max-w-full overflow-hidden rounded-lg border border-sky-200 bg-slate-950">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={imageUrl} alt="attached image candidate overlay" className="max-h-[520px] max-w-full object-contain opacity-90" />
-        {candidates.map((candidate, index) => {
-          const left = (candidate.bbox.x_min / imageWidth) * 100;
-          const top = (candidate.bbox.y_min / imageHeight) * 100;
-          const width = ((candidate.bbox.x_max - candidate.bbox.x_min) / imageWidth) * 100;
-          const height = ((candidate.bbox.y_max - candidate.bbox.y_min) / imageHeight) * 100;
-          return (
-            <div
-              key={`${candidate.bbox.x_min}-${candidate.bbox.y_min}-${index}`}
-              className="absolute border-2 border-sky-400 bg-sky-400/20 shadow-[0_0_0_9999px_rgba(15,23,42,0.25)]"
-              style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
-            >
-              <span className="absolute left-1 top-1 rounded bg-sky-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                #{index + 1} {candidate.confidence !== undefined ? candidate.confidence.toFixed(2) : ""}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      <JsonView value={candidates} />
-    </div>
-  );
-}
-
-function TimetableReviewEditor({
-  title,
-  itemKind,
-  items,
-  onChange,
-}: {
-  title: string;
-  itemKind: "live" | "meet_and_greet";
-  items: TimetableEditItem[];
-  onChange: (items: TimetableEditItem[]) => void;
-}) {
-  function updateItem(clientId: string, patch: Partial<TimetableEditItem>) {
-    onChange(items.map((item) => (item.client_id === clientId ? { ...item, ...patch } : item)));
-  }
-
-  function moveItem(index: number, direction: -1 | 1) {
-    const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= items.length) return;
-    const next = [...items];
-    const [item] = next.splice(index, 1);
-    next.splice(nextIndex, 0, item);
-    onChange(next);
-  }
-
-  return (
-    <div className="rounded-xl border border-[var(--border)] bg-white p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className="font-semibold text-slate-900">{title}</h3>
-          <p className="text-xs text-slate-500">{items.length} rows</p>
-        </div>
-        <Button onClick={() => onChange([...items, createEmptyTimetableItem(itemKind)])} className="bg-slate-900 text-white">
-          <Plus size={15} />
-          追加
-        </Button>
-      </div>
-      <div className="space-y-3">
-        {items.length ? (
-          items.map((item, index) => (
-            <div key={item.client_id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <span className="rounded-full bg-white px-2 py-0.5 font-mono text-xs text-slate-500">#{index + 1}</span>
-                <div className="flex flex-wrap gap-1">
-                  <button type="button" onClick={() => moveItem(index, -1)} className="rounded bg-white p-1 text-slate-500 hover:text-slate-900" title="上へ">
-                    <ArrowUp size={15} />
-                  </button>
-                  <button type="button" onClick={() => moveItem(index, 1)} className="rounded bg-white p-1 text-slate-500 hover:text-slate-900" title="下へ">
-                    <ArrowDown size={15} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onChange([...items.slice(0, index + 1), { ...item, id: null, client_id: crypto.randomUUID() }, ...items.slice(index + 1)])}
-                    className="rounded bg-white p-1 text-slate-500 hover:text-slate-900"
-                    title="複製"
-                  >
-                    <CopyIcon size={15} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onChange(items.filter((current) => current.client_id !== item.client_id))}
-                    className="rounded bg-white p-1 text-red-500 hover:text-red-700"
-                    title="削除"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
-                <Input
-                  value={item.start_time ?? ""}
-                  onChange={(event) => updateItem(item.client_id, { start_time: event.target.value })}
-                  placeholder="start"
-                  className="font-mono text-xs"
-                />
-                <Input
-                  value={item.end_time ?? ""}
-                  onChange={(event) => updateItem(item.client_id, { end_time: event.target.value })}
-                  placeholder="end"
-                  className="font-mono text-xs"
-                />
-                <Input
-                  value={item.title ?? ""}
-                  onChange={(event) => updateItem(item.client_id, { title: event.target.value })}
-                  placeholder="title"
-                  className="lg:col-span-2"
-                />
-                {itemKind === "live" ? (
-                  <>
-                    <Input value={item.performer_name ?? ""} onChange={(event) => updateItem(item.client_id, { performer_name: event.target.value })} placeholder="performer" />
-                    <Input value={item.stage_name ?? ""} onChange={(event) => updateItem(item.client_id, { stage_name: event.target.value })} placeholder="stage" />
-                  </>
-                ) : (
-                  <>
-                    <Input value={item.performer_name ?? ""} onChange={(event) => updateItem(item.client_id, { performer_name: event.target.value })} placeholder="performer" />
-                    <Input value={item.booth_name ?? ""} onChange={(event) => updateItem(item.client_id, { booth_name: event.target.value })} placeholder="booth" />
-                  </>
-                )}
-              </div>
-            </div>
-          ))
-        ) : (
-          <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-            まだ行がありません。AI抽出が空の場合はここから追加できます。
-          </p>
-        )}
-      </div>
-    </div>
-  );
+function getSession(result: OCRTestWorkflowResponse | null) {
+  return result?.result.session ?? result?.result.parsed.session ?? null;
 }
 
 export default function AdminOCRTestPage() {
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
-  const [result, setResult] = useState<OCRTestWorkflowResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [ignoreCache, setIgnoreCache] = useState(false);
-  const [dryRun, setDryRun] = useState(false);
-  const [groundTruthForm, setGroundTruthForm] = useState<GroundTruthFormState>(createEmptyGroundTruthForm());
-  const [sourceTypeGroundTruthByParsingId, setSourceTypeGroundTruthByParsingId] = useState<Record<string, OCRTestSourceType | "">>({});
-  const [reviewForm, setReviewForm] = useState<ReviewFormState>(createEmptyReviewForm());
-  const [liveSessionRows, setLiveSessionRows] = useState<TimetableEditItem[]>([]);
-  const [meetAndGreetRows, setMeetAndGreetRows] = useState<TimetableEditItem[]>([]);
-  const [selectedEventCoreCandidateId, setSelectedEventCoreCandidateId] = useState<string | null>(null);
-  const [confirmMode, setConfirmMode] = useState<"create_new" | "link_existing">("create_new");
-  const [isSavingGroundTruth, setIsSavingGroundTruth] = useState(false);
-  const [savingSourceTypeGroundTruthId, setSavingSourceTypeGroundTruthId] = useState<string | null>(null);
-  const [isSavingReview, setIsSavingReview] = useState(false);
-  const [isSavingTimetableReview, setIsSavingTimetableReview] = useState(false);
-  const [runningVisionEvaluationKey, setRunningVisionEvaluationKey] = useState<string | null>(null);
-  const [savingVisionScoreRunId, setSavingVisionScoreRunId] = useState<string | null>(null);
-  const [isConfirmingEventCore, setIsConfirmingEventCore] = useState(false);
-  const [groundTruthMessage, setGroundTruthMessage] = useState<string | null>(null);
-  const [sourceTypeGroundTruthMessage, setSourceTypeGroundTruthMessage] = useState<string | null>(null);
-  const [reviewMessage, setReviewMessage] = useState<string | null>(null);
-  const [timetableReviewMessage, setTimetableReviewMessage] = useState<string | null>(null);
-  const [visionEvaluationMessage, setVisionEvaluationMessage] = useState<string | null>(null);
-
-  const primaryAsset = result?.result.assets[0] ?? null;
-  const session = result?.result.session ?? null;
-  const sessionDecision = session?.decision ?? session?.canonical_event_candidate ?? result?.result.parsed.session?.canonical_event_candidate ?? null;
-  const eventCoreResolution = session?.event_core_resolution ?? result?.result.parsed.session?.event_core_resolution ?? null;
-  const canonicalEventCandidate = eventCoreResolution?.canonical_event_candidate ?? sessionDecision ?? null;
-  const sessionAggregation = session?.aggregation ?? result?.result.parsed.session?.aggregation ?? null;
-  const aggregatedEventCandidates = sessionAggregation?.event_candidates ?? [];
-  const extracted = result?.result.parsed.event ?? null;
-  const llmExtraction = result?.result.parsed.llm_extraction ?? null;
-  const resolution = result?.result.resolution ?? null;
-  const lines = result?.result.parsed.lines ?? [];
-  const selectedGroundTruthParsingResultId =
-    sessionDecision?.selected_item_id ?? result?.result.parsing_result_id ?? result?.result.parsing_result_ids?.[0] ?? null;
-  const selectedEventCoreCandidate = eventCoreResolution?.selected_event_core_candidate ?? null;
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [result, setResult] = useState<OCRTestWorkflowResponse | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const [currentStep, setCurrentStep] = useState<ProcessingStepKey | "idle" | "done" | "failed">("idle");
+  const [completedSteps, setCompletedSteps] = useState<ProcessingStepKey[]>([]);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [jobProgress, setJobProgress] = useState(0);
+  const [jobMessage, setJobMessage] = useState("");
 
   useEffect(() => {
-    if (!selectedFiles.length) {
-      setPreviewUrl(null);
-      setPreviewUrls([]);
-      return;
-    }
-    const objectUrls = selectedFiles.map((file) => URL.createObjectURL(file));
-    setPreviewUrls(objectUrls);
-    setPreviewUrl(objectUrls[0] ?? null);
-    return () => objectUrls.forEach((objectUrl) => URL.revokeObjectURL(objectUrl));
-  }, [selectedFiles]);
-
-  useEffect(() => {
-    setGroundTruthForm(result ? buildGroundTruthForm(result) : createEmptyGroundTruthForm());
-  }, [result]);
-
-  useEffect(() => {
-    const groundTruth = result?.result.ground_truth;
-    if (!groundTruth?.event_parsing_result_id) {
-      setSourceTypeGroundTruthByParsingId({});
-      return;
-    }
-    setSourceTypeGroundTruthByParsingId({
-      [groundTruth.event_parsing_result_id]: normalizeEditableSourceType(groundTruth.source_type),
-    });
-  }, [result]);
-
-  useEffect(() => {
-    setReviewForm(result ? buildReviewForm(result) : createEmptyReviewForm());
-    const timetableState = buildTimetableReviewState(result);
-    setLiveSessionRows(timetableState.live_sessions);
-    setMeetAndGreetRows(timetableState.meet_and_greet_sessions);
-    setSelectedEventCoreCandidateId(result?.result.session?.event_core_resolution?.selected_event_core_candidate?.event_core_id ?? null);
-    setConfirmMode(result?.result.session?.event_core_resolution?.selected_event_core_candidate ? "link_existing" : "create_new");
-  }, [result]);
-
-  const eventCoreSearchResult = useMemo(() => {
-    if (!resolution) return null;
-    if (resolution.action === "matched_existing") {
-      const matched = resolution.duplicate_candidates[0];
-      return {
-        matched: true,
-        event_id: matched?.id ?? resolution.event_id,
-        event_name: matched?.display_name ?? null,
-        dry_run: result?.result.dry_run ?? false,
-      };
-    }
-    return { matched: false, dry_run: result?.result.dry_run ?? false };
-  }, [resolution, result?.result.dry_run]);
-
-  const creationResult = useMemo(() => {
-    if (!resolution) return null;
-    if (resolution.action === "created_event") {
-      return {
-        created: Boolean(resolution.persisted),
-        would_create: Boolean(resolution.would_create_event),
-        event_id: resolution.event_id,
-        dry_run: result?.result.dry_run ?? false,
-      };
-    }
-    return {
-      created: false,
-      would_create: false,
-      dry_run: result?.result.dry_run ?? false,
+    const urls = files.map((file) => URL.createObjectURL(file));
+    setPreviewUrls(urls);
+    return () => {
+      urls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [resolution, result?.result.dry_run]);
+  }, [files]);
 
-  function handleFilesSelected(fileList: FileList | null) {
-    const nextFiles = fileList ? Array.from(fileList).slice(0, 4) : [];
-    setSelectedFiles(nextFiles);
+  useEffect(() => {
+    if (!isProcessing || !startedAt) return;
+    const timerId = window.setInterval(() => {
+      setElapsedMs(Date.now() - startedAt);
+    }, 500);
+    return () => window.clearInterval(timerId);
+  }, [isProcessing, startedAt]);
+
+  const session = getSession(result);
+  const canonicalCandidate = pickCanonicalCandidate(result);
+  const reviewCandidate = useMemo(() => buildEventAggregateCandidate(result), [result]);
+  const isManualReviewCandidate = reviewCandidate?.reasons.includes("manual_ground_truth_review_required") ?? false;
+  const ocrOutput = useMemo(() => buildOcrOutput(reviewCandidate), [reviewCandidate]);
+
+  const sourceImages = useMemo<SourceImagePreview[]>(() => {
+    const assets = result?.result.assets ?? [];
+    return files.map((file, index) => ({
+      filename: file.name,
+      source_kind: "upload_session_image",
+      region_kinds: assets[index]?.source_type ? [assets[index].source_type] : [],
+      image_data_url: undefined,
+      image_features: assets[index]?.image_features ?? null,
+    }));
+  }, [files, result]);
+
+  const rawText = useMemo(() => {
+    const assetTexts = result?.result.assets?.map((asset) => asset.ocr_text).filter(Boolean) ?? [];
+    if (assetTexts.length) return assetTexts.join("\n\n---\n\n");
+    return result?.result.parsed.raw_text ?? "";
+  }, [result]);
+
+  function handleFileChange(selectedFiles: FileList | null) {
+    const nextFiles = Array.from(selectedFiles ?? []);
     setResult(null);
-    setError(null);
-    setGroundTruthForm(createEmptyGroundTruthForm());
-    setSourceTypeGroundTruthByParsingId({});
-    setLiveSessionRows([]);
-    setMeetAndGreetRows([]);
-    setGroundTruthMessage(null);
-    setSourceTypeGroundTruthMessage(null);
-    setTimetableReviewMessage(null);
-    setVisionEvaluationMessage(null);
+    setErrorMessage(null);
+    setStatusMessage("");
+    setCurrentStep("idle");
+    setCompletedSteps([]);
+    setStartedAt(null);
+    setElapsedMs(0);
+    setJobProgress(5);
+    setJobMessage("");
+
+    if (nextFiles.length > MAX_UPLOAD_FILES) {
+      setFiles([]);
+      setErrorMessage(`OCR Ground Truthでは画像は最大${MAX_UPLOAD_FILES}枚までです。5枚以上はOCR Evaluation Labで評価してください。`);
+      return;
+    }
+
+    setFiles(nextFiles);
   }
 
   async function handleSubmit() {
-    if (selectedFiles.length === 0) return;
+    if (!files.length) {
+      setErrorMessage("画像を1枚以上選択してください。");
+      return;
+    }
 
-    setIsSubmitting(true);
-    setError(null);
-    setResult(null);
-    setGroundTruthMessage(null);
-    setSourceTypeGroundTruthMessage(null);
+    setIsProcessing(true);
+    setErrorMessage(null);
+    setCompletedSteps([]);
+    const runStartedAt = Date.now();
+    setStartedAt(runStartedAt);
+    setElapsedMs(0);
+    setJobProgress(0);
+    setJobMessage("");
+    setCurrentStep("upload");
+    setStatusMessage("画像を保存しています...");
     try {
-      const source = await uploadSourceForOCRTest(selectedFiles, { ignoreCache, dryRun });
-      const reparsed = await reparseSourceForOCRTest(source.id);
-      setResult(reparsed);
-    } catch (err) {
-      if (err instanceof ApiError) {
-        const detail = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail, null, 2);
-        setError(detail || err.message);
-      } else {
-        setError(err instanceof Error ? err.message : "OCR検証の実行に失敗しました");
+      const source = await uploadSourceForOCRTest(files, { ignoreCache, dryRun: false });
+      setCompletedSteps(["upload"]);
+      setCurrentStep("ocr");
+      setStatusMessage("OCRジョブを開始しています...");
+      const startedJob = await startOCRReparseJob(source.id);
+      setJobProgress(startedJob.progress);
+      setJobMessage(startedJob.message);
+      setStatusMessage(startedJob.message || "OCRとUpload Session集約を実行しています...");
+
+      let parsed: OCRTestWorkflowResponse | null = null;
+      let currentJobId = startedJob.job_id;
+      while (true) {
+        await new Promise((resolve) => window.setTimeout(resolve, REPARSE_JOB_POLL_INTERVAL_MS));
+        const job = await getOCRReparseJob(currentJobId);
+        setJobProgress(job.progress);
+        setJobMessage(job.message);
+        setStatusMessage(job.message);
+
+        if (job.status === "completed") {
+          parsed = job.result;
+          break;
+        }
+        if (job.status === "failed") {
+          throw new Error(job.error || job.message || "OCRジョブに失敗しました。");
+        }
+        currentJobId = job.job_id;
       }
+      if (!parsed) {
+        throw new Error("OCRジョブの結果を取得できませんでした。");
+      }
+      setCompletedSteps(["upload", "ocr", "aggregation"]);
+      setCurrentStep("candidate");
+      setResult(parsed);
+      setCompletedSteps(["upload", "ocr", "aggregation", "candidate"]);
+      setCurrentStep("done");
+      setStatusMessage("OCRが完了しました。候補を確認してレビュー画面へ送れます。");
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : error instanceof Error ? error.message : "OCR処理に失敗しました。";
+      setErrorMessage(message);
+      setStatusMessage("");
+      setCurrentStep("failed");
     } finally {
-      setIsSubmitting(false);
+      setElapsedMs(Date.now() - runStartedAt);
+      setIsProcessing(false);
     }
   }
 
-  async function handleSaveGroundTruth() {
-    const parsingResultId = selectedGroundTruthParsingResultId;
-    if (!parsingResultId) return;
-
-    setIsSavingGroundTruth(true);
-    setError(null);
-    setGroundTruthMessage(null);
-    try {
-      const sourceTypeGroundTruth =
-        sourceTypeGroundTruthByParsingId[parsingResultId] ||
-        (result?.result.ground_truth?.event_parsing_result_id === parsingResultId ? normalizeEditableSourceType(result.result.ground_truth.source_type) : "");
-      const saved = await saveOCRTestGroundTruth(parsingResultId, {
-        event_name: groundTruthForm.event_name.trim() || null,
-        event_date: groundTruthForm.event_date || null,
-        venue_name: groundTruthForm.venue_name.trim() || null,
-        source_type: sourceTypeGroundTruth || null,
-      });
-      setResult((current) =>
-        current
-          ? {
-              ...current,
-              result: {
-                ...current.result,
-                ground_truth: saved,
-                parsed: {
-                  ...current.result.parsed,
-                  ground_truth: saved,
-                },
-              },
-            }
-          : current
-      );
-      setGroundTruthMessage("正解を保存しました");
-    } catch (err) {
-      if (err instanceof ApiError) {
-        const detail = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail, null, 2);
-        setError(detail || err.message);
-      } else {
-        setError(err instanceof Error ? err.message : "正解の保存に失敗しました");
-      }
-    } finally {
-      setIsSavingGroundTruth(false);
-    }
+  function handleCopyDebugJson() {
+    if (!result) return;
+    const payload = {
+      source: result.source,
+      session,
+      canonical_event_candidate: canonicalCandidate,
+      ocr_output: ocrOutput,
+    };
+    navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(() => {
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1400);
+    });
   }
 
-  async function handleSaveSourceTypeGroundTruth(parsingResultId: string) {
-    if (!parsingResultId) return;
+  async function handleOpenReview() {
+    if (!reviewCandidate || !result) return;
+    const imageDataUrls = await Promise.all(files.map((file) => readFileAsDataUrl(file).catch(() => "")));
+    const reviewSourceImages = sourceImages.map((image, index) => ({
+      ...image,
+      image_data_url: imageDataUrls[index] || undefined,
+    }));
 
-    setSavingSourceTypeGroundTruthId(parsingResultId);
-    setError(null);
-    setSourceTypeGroundTruthMessage(null);
-    try {
-      const saved = await saveOCRTestGroundTruth(parsingResultId, {
-        event_name: groundTruthForm.event_name.trim() || null,
-        event_date: groundTruthForm.event_date || null,
-        venue_name: groundTruthForm.venue_name.trim() || null,
-        source_type: sourceTypeGroundTruthByParsingId[parsingResultId] || null,
-      });
-      setResult((current) =>
-        current
-          ? {
-              ...current,
-              result: {
-                ...current.result,
-                ground_truth: saved,
-                parsed: {
-                  ...current.result.parsed,
-                  ground_truth: saved,
-                },
-              },
-            }
-          : current
-      );
-      setSourceTypeGroundTruthMessage("画像の source_type Ground Truth を保存しました");
-    } catch (err) {
-      if (err instanceof ApiError) {
-        const detail = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail, null, 2);
-        setError(detail || err.message);
-      } else {
-        setError(err instanceof Error ? err.message : "source_type Ground Truth の保存に失敗しました");
-      }
-    } finally {
-      setSavingSourceTypeGroundTruthId(null);
-    }
-  }
-
-  async function handleSaveReview() {
-    const sessionId = session?.id;
-    if (!sessionId) return;
-
-    setIsSavingReview(true);
-    setError(null);
-    setReviewMessage(null);
-    try {
-      const savedSession = await saveOCRUploadSessionReview(sessionId, {
-        event_name: reviewForm.event_name.trim() || null,
-        event_date: reviewForm.event_date || null,
-        venue_name: reviewForm.venue_name.trim() || null,
-      });
-      setResult((current) =>
-        current
-          ? {
-              ...current,
-              result: {
-                ...current.result,
-                session: savedSession,
-              },
-            }
-          : current
-      );
-      setReviewMessage("レビューを保存しました");
-    } catch (err) {
-      if (err instanceof ApiError) {
-        const detail = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail, null, 2);
-        setError(detail || err.message);
-      } else {
-        setError(err instanceof Error ? err.message : "レビューの保存に失敗しました");
-      }
-    } finally {
-      setIsSavingReview(false);
-    }
-  }
-
-  async function handleSaveTimetableReview() {
-    const sessionId = session?.id;
-    if (!sessionId) return;
-
-    setIsSavingTimetableReview(true);
-    setError(null);
-    setTimetableReviewMessage(null);
-    try {
-      const savedSession = await saveOCRUploadSessionTimetableReview(sessionId, {
-        live_sessions: toReviewPayload(liveSessionRows),
-        meet_and_greet_sessions: toReviewPayload(meetAndGreetRows),
-      });
-      setResult((current) =>
-        current
-          ? {
-              ...current,
-              result: {
-                ...current.result,
-                session: savedSession,
-              },
-            }
-          : current
-      );
-      setTimetableReviewMessage("Timetableレビューを保存しました");
-    } catch (err) {
-      if (err instanceof ApiError) {
-        const detail = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail, null, 2);
-        setError(detail || err.message);
-      } else {
-        setError(err instanceof Error ? err.message : "Timetableレビューの保存に失敗しました");
-      }
-    } finally {
-      setIsSavingTimetableReview(false);
-    }
-  }
-
-  async function handleRunVisionEvaluation(sessionItemId: string, modelName: "gpt-4o" | "gpt-5-mini" | "gpt-5") {
-    const sessionId = session?.id;
-    if (!sessionId) return;
-
-    const key = `${sessionItemId}:${modelName}`;
-    setRunningVisionEvaluationKey(key);
-    setError(null);
-    setVisionEvaluationMessage(null);
-    try {
-      const savedSession = await runOCRVisionEvaluation(sessionId, {
-        session_item_id: sessionItemId,
-        model_name: modelName,
-      });
-      setResult((current) =>
-        current
-          ? {
-              ...current,
-              result: {
-                ...current.result,
-                session: savedSession,
-              },
-            }
-          : current
-      );
-      setVisionEvaluationMessage(`${modelName} のVision評価を保存しました`);
-    } catch (err) {
-      if (err instanceof ApiError) {
-        const detail = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail, null, 2);
-        setError(detail || err.message);
-      } else {
-        setError(err instanceof Error ? err.message : "Vision評価の実行に失敗しました");
-      }
-    } finally {
-      setRunningVisionEvaluationKey(null);
-    }
-  }
-
-  async function handleUpdateVisionScore(runId: string, value: string) {
-    const humanScore = value ? Number(value) : null;
-    setSavingVisionScoreRunId(runId);
-    setError(null);
-    try {
-      const updated = await updateOCRVisionEvaluationHumanScore(runId, humanScore);
-      setResult((current) => {
-        if (!current?.result.session) return current;
-        return {
-          ...current,
-          result: {
-            ...current.result,
-            session: {
-              ...current.result.session,
-              vision_evaluation_runs: current.result.session.vision_evaluation_runs.map((run) =>
-                run.id === updated.id ? updated : run
-              ),
-            },
+    const bundle = {
+      created_at: new Date().toISOString(),
+      origin: "ocr_ground_truth",
+      summary: {
+        total: 1,
+        success: 1,
+        failed: 0,
+        source_kind_counts: { upload_session: 1 },
+        region_kind_counts: {},
+      },
+      candidates: [
+        {
+          id: session?.id ?? result.source.id,
+          filename: files.map((file) => file.name).join(", ") || result.source.id,
+          source_id: result.source.id,
+          upload_session_id: session?.id ?? result.result.session_id ?? null,
+          event_aggregate_candidate: reviewCandidate,
+          ocr_output: ocrOutput,
+          source_kind: {
+            kind: "upload_session",
+            image_count: files.length,
           },
-        };
-      });
-    } catch (err) {
-      if (err instanceof ApiError) {
-        const detail = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail, null, 2);
-        setError(detail || err.message);
-      } else {
-        setError(err instanceof Error ? err.message : "Human Score の保存に失敗しました");
-      }
-    } finally {
-      setSavingVisionScoreRunId(null);
-    }
+          source_images: reviewSourceImages,
+        },
+      ],
+      items: [
+        {
+          id: session?.id ?? result.source.id,
+          filename: files.map((file) => file.name).join(", ") || result.source.id,
+          source_id: result.source.id,
+          upload_session_id: session?.id ?? result.result.session_id ?? null,
+          event_aggregate_candidate: reviewCandidate,
+          ocr_output: ocrOutput,
+          source_kind: {
+            kind: "upload_session",
+            image_count: files.length,
+          },
+          source_images: reviewSourceImages,
+        },
+      ],
+    };
+
+    window.localStorage.setItem(EVENT_CANDIDATE_REVIEW_BUNDLE_KEY, JSON.stringify(bundle));
+    window.location.href = "/admin/event-candidate-review";
   }
 
-  async function handleConfirmEventCore() {
-    const sessionId = session?.id;
-    if (!sessionId) return;
-
-    setIsConfirmingEventCore(true);
-    setError(null);
-    setReviewMessage(null);
-    try {
-      const payload: OCRUploadSessionConfirmEventCorePayload =
-        confirmMode === "link_existing"
-          ? {
-              mode: "link_existing",
-              event_core_id: selectedEventCoreCandidateId ?? undefined,
-            }
-          : {
-              mode: "create_new",
-              event_name: reviewForm.event_name.trim() || null,
-              event_date: reviewForm.event_date || null,
-              venue_name: reviewForm.venue_name.trim() || null,
-            };
-      const savedSession = await confirmOCRUploadSessionEventCore(sessionId, payload);
-      setResult((current) =>
-        current
-          ? {
-              ...current,
-              result: {
-                ...current.result,
-                session: savedSession,
-                event_id: savedSession.event_core_id,
-              },
-            }
-          : current
-      );
-      setReviewMessage(confirmMode === "link_existing" ? "既存 Event Core に紐付けました" : "新規 Event Core を作成しました");
-    } catch (err) {
-      if (err instanceof ApiError) {
-        const detail = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail, null, 2);
-        setError(detail || err.message);
-      } else {
-        setError(err instanceof Error ? err.message : "Event Core 確定に失敗しました");
-      }
-    } finally {
-      setIsConfirmingEventCore(false);
-    }
-  }
+  const sessionItems = session?.items ?? [];
+  const aggregation = session?.aggregation ?? null;
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Admin OCR Test" subtitle="NDLOCR → session 集約 → Event Core 解決の精度を管理画面で確認します。" backHref="/admin" />
+      <PageHeader
+        title="OCR Ground Truth"
+        subtitle="最大4枚を1つのUpload SessionとしてOCRし、イベント候補を人間レビューへ送ります。教師データは画像単位ではなくUpload Session単位で作成します。"
+      />
 
-      <Card className="space-y-4">
-        <div className="flex items-center gap-2">
-          <ImageIcon size={18} className="text-[var(--muted)]" />
-          <h2 className="text-base font-semibold">画像アップロード</h2>
+      <Card className="space-y-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Step 1</p>
+            <h2 className="mt-1 text-xl font-bold text-slate-950">Upload Sessionを作成</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Ground Truth収集用の正規入口です。Xスクショ、フライヤー、タイテ、特殊画像などを最大4枚までまとめて投入できます。
+            </p>
+          </div>
+          <a className="text-sm font-semibold text-sky-700 underline-offset-4 hover:underline" href="/admin/ocr-evaluation">
+            100枚評価はOCR Evaluation Labへ
+          </a>
         </div>
-        <Input type="file" accept={ACCEPT} multiple onChange={(event) => handleFilesSelected(event.currentTarget.files)} />
-        <div className="rounded-md border border-dashed border-[var(--border)] bg-white p-3 text-sm text-[var(--muted)]">
-          {selectedFiles.length
-            ? `${selectedFiles.length}枚選択中 / ${selectedFiles.map((file) => `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`).join(" / ")}`
-            : "画像を最大4枚まで選択してください"}
-        </div>
-        <label className="flex items-center gap-2 text-sm text-slate-700">
-          <input
-            type="checkbox"
-            checked={ignoreCache}
-            onChange={(event) => setIgnoreCache(event.target.checked)}
-            className="h-4 w-4 rounded border-slate-300"
-          />
-          Ignore Cache
-        </label>
-        <label className="flex items-center gap-2 text-sm text-slate-700">
-          <input
-            type="checkbox"
-            checked={dryRun}
-            onChange={(event) => setDryRun(event.target.checked)}
-            className="h-4 w-4 rounded border-slate-300"
-          />
-          Dry Run
-        </label>
-        <Button onClick={handleSubmit} disabled={selectedFiles.length === 0 || isSubmitting} className="w-full sm:w-auto">
-          {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <ScanSearch size={16} />}
-          {isSubmitting ? "検証実行中..." : "OCR検証を実行"}
-        </Button>
-        {error ? (
-          <div className="rounded-md border border-[#fecaca] bg-[#fef2f2] px-4 py-3 text-sm text-[#b91c1c]">{error}</div>
-        ) : null}
-      </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="space-y-3">
-          <h2 className="text-base font-semibold">1. Upload Images</h2>
-          {previewUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={previewUrl} alt="OCR test upload preview" className="max-h-[420px] w-full rounded-md border object-contain" />
-          ) : (
-            <div className="rounded-md border border-dashed border-[var(--border)] p-8 text-sm text-[var(--muted)]">プレビューはここに表示されます</div>
-          )}
-          <div className="space-y-2">
-            {selectedFiles.map((file, index) => (
-              <div key={`${file.name}-${index}`} className="rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium text-slate-900">
-                    {index + 1}. {file.name}
-                  </span>
-                  <span className="text-xs text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+        <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center transition hover:border-sky-400 hover:bg-sky-50">
+          <ImageIcon className="h-10 w-10 text-slate-400" />
+          <span className="mt-3 text-base font-semibold text-slate-900">画像を選択</span>
+          <span className="mt-1 text-sm text-slate-500">JPG / PNG / WebP、最大4枚</span>
+          <input
+            className="sr-only"
+            type="file"
+            accept={ACCEPT}
+            multiple
+            suppressHydrationWarning
+            onChange={(event) => handleFileChange(event.target.files)}
+          />
+        </label>
+
+        {files.length > 0 && (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {files.map((file, index) => (
+              <div key={`${file.name}-${file.lastModified}-${index}`} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                {previewUrls[index] ? (
+                  <img src={previewUrls[index]} alt={file.name} className="h-44 w-full object-cover" />
+                ) : (
+                  <div className="flex h-44 items-center justify-center bg-slate-100 text-sm text-slate-500">preview unavailable</div>
+                )}
+                <div className="space-y-1 p-3">
+                  <p className="truncate text-sm font-semibold text-slate-900">{file.name}</p>
+                  <p className="text-xs text-slate-500">{Math.round(file.size / 1024).toLocaleString()} KB</p>
                 </div>
               </div>
             ))}
           </div>
-        </Card>
+        )}
 
-        <Card className="space-y-3">
-          <CardHeader
-            title="Supplemental: Processing Metadata"
-            copyText={JSON.stringify(
-              {
-                phash: primaryAsset?.phash ?? null,
-                reused_existing_raw_input: primaryAsset?.reused_existing_raw_input ?? null,
-                ignore_cache: primaryAsset?.ignore_cache ?? ignoreCache,
-                dry_run: result?.result.dry_run ?? dryRun,
-                processing_time_ms: result?.result.processing_time_ms ?? null,
-              },
-              null,
-              2
-            )}
-          />
-          <JsonView
-            value={{
-              phash: primaryAsset?.phash ?? null,
-              reused_existing_raw_input: primaryAsset?.reused_existing_raw_input ?? null,
-              ignore_cache: primaryAsset?.ignore_cache ?? ignoreCache,
-              dry_run: result?.result.dry_run ?? dryRun,
-              processing_time_ms: result?.result.processing_time_ms ?? null,
-            }}
-          />
-        </Card>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="button" onClick={handleSubmit} disabled={isProcessing || files.length === 0}>
+            {isProcessing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
+            OCRを実行
+          </Button>
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input
+              type="checkbox"
+              checked={ignoreCache}
+              suppressHydrationWarning
+              onChange={(event) => setIgnoreCache(event.target.checked)}
+            />
+            キャッシュを使わず再OCR
+          </label>
+          {statusMessage && <span className="text-sm text-slate-600">{statusMessage}</span>}
+        </div>
 
-        <Card className="space-y-3 lg:col-span-2">
-          <CardHeader title="2. OCR Result" copyText={result?.result.parsed.raw_text ?? ""} />
-          <Textarea readOnly value={result?.result.parsed.raw_text ?? ""} placeholder="raw_text がここに表示されます" className="min-h-[260px] font-mono text-xs leading-6" />
-        </Card>
+        {errorMessage && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+            {errorMessage}
+          </div>
+        )}
 
-        <Card className="space-y-3">
-          <CardHeader title="2-2. OCR Lines" copyText={JSON.stringify(lines, null, 2)} />
-          <JsonView value={lines} />
-        </Card>
-
-        <Card className="space-y-3">
-          <CardHeader
-            title="2-3. Structured OCR Result"
-            copyText={JSON.stringify(
-              {
-                event_name: llmExtraction?.event_name ?? extracted?.display_name ?? null,
-                event_date: llmExtraction?.event_date ?? extracted?.event_date ?? null,
-                venue_name: llmExtraction?.venue_name ?? extracted?.venue_name ?? null,
-                source_type: displaySourceType(llmExtraction?.source_type ?? extracted?.source_type ?? null),
-              },
-              null,
-              2
-            )}
-          />
-          <JsonView
-            value={{
-              event_name: llmExtraction?.event_name ?? extracted?.display_name ?? null,
-              event_date: llmExtraction?.event_date ?? extracted?.event_date ?? null,
-              venue_name: llmExtraction?.venue_name ?? extracted?.venue_name ?? null,
-              source_type: displaySourceType(llmExtraction?.source_type ?? extracted?.source_type ?? null),
-            }}
-          />
-        </Card>
-
-        <Card className="space-y-3 lg:col-span-2">
-          <CardHeader title="3. Image Candidates" copyText={JSON.stringify(result?.result.assets ?? [], null, 2)} />
-          <div className="space-y-4">
-            {result?.result.assets?.length ? (
-              result.result.assets.map((item, index) => {
-                const sourceTypeAudit = item.parsed?.source_type_audit as SourceTypeAudit | null | undefined;
-                const parsingResultId = item.parsing_result_id ?? "";
-                const sourceTypeGroundTruth = parsingResultId ? sourceTypeGroundTruthByParsingId[parsingResultId] ?? "" : "";
-                const attachedImageCandidates = getAttachedImageCandidates(item.source_kind);
-                const imageWidth = typeof item.image_features?.width === "number" ? item.image_features.width : undefined;
-                const imageHeight = typeof item.image_features?.height === "number" ? item.image_features.height : undefined;
+        {(isProcessing || currentStep !== "idle") && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-slate-900">実行状況</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  経過時間: {formatMs(elapsedMs)}
+                  {currentStep === "done" ? " / 完了" : currentStep === "failed" ? " / 失敗" : ""}
+                </p>
+                {jobMessage && <p className="mt-1 text-xs font-medium text-sky-700">{jobMessage}</p>}
+              </div>
+              {isProcessing && <Loader2 className="h-5 w-5 animate-spin text-sky-700" />}
+            </div>
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${currentStep === "failed" ? "bg-red-500" : "bg-sky-600"}`}
+                style={{ width: `${Math.max(0, Math.min(100, jobProgress || (currentStep === "done" ? 100 : 0)))}%` }}
+              />
+            </div>
+            <div className="mt-4 grid gap-2 md:grid-cols-4">
+              {PROCESSING_STEPS.map((step) => {
+                const done = completedSteps.includes(step.key);
+                const active = currentStep === step.key;
+                const failed = currentStep === "failed" && active;
                 return (
-                <div key={item.asset_id} className="rounded-lg border border-[var(--border)] bg-white p-4">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">画像 {index + 1}</p>
-                      <p className="text-xs text-slate-500">{item.image_path}</p>
+                  <div
+                    key={step.key}
+                    className={`rounded-xl border p-3 ${
+                      done
+                        ? "border-emerald-200 bg-emerald-50"
+                        : active
+                          ? "border-sky-200 bg-sky-50"
+                          : failed
+                            ? "border-red-200 bg-red-50"
+                            : "border-slate-200 bg-slate-50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`grid h-6 w-6 place-items-center rounded-full text-xs font-bold ${
+                          done
+                            ? "bg-emerald-600 text-white"
+                            : active
+                              ? "bg-sky-700 text-white"
+                              : "bg-slate-200 text-slate-500"
+                        }`}
+                      >
+                        {done ? "✓" : PROCESSING_STEPS.indexOf(step) + 1}
+                      </span>
+                      <p className="text-sm font-bold text-slate-900">{step.label}</p>
                     </div>
-                    <div className="text-right text-xs text-slate-500">
-                      <div>
-                        source_type: <span className="font-mono text-slate-800">{displaySourceType(item.source_type)}</span>
-                      </div>
-                      <div>
-                        confidence: <span className="font-mono text-slate-800">{item.confidence ?? "-"}</span>
-                      </div>
-                    </div>
+                    <p className="mt-2 text-xs leading-relaxed text-slate-600">{step.description}</p>
                   </div>
-                  <div className={`mb-4 rounded-lg border bg-slate-50 p-3 ${sourceTypeAudit?.conflict ? "border-red-200 ring-2 ring-red-100" : "border-[var(--border)]"}`}>
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">source_type Ground Truth</p>
-                        <p className="text-xs text-slate-500">source_type は画像単位です。Event Ground Truth とは分けて確認します。</p>
-                      </div>
-                      {sourceTypeAudit?.conflict ? <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">LLM ≠ Rule</span> : null}
-                    </div>
-                    <div className="grid gap-3 lg:grid-cols-4">
-                      <div className="rounded-md border border-[var(--border)] bg-white px-3 py-3">
-                        <p className="text-xs font-medium uppercase tracking-wide text-slate-400">LLM source_type</p>
-                        <p className="mt-1 font-mono text-sm font-semibold text-indigo-700">{displaySourceType(sourceTypeAudit?.llm_source_type ?? item.parsed?.llm_extraction?.source_type ?? item.source_type)}</p>
-                      </div>
-                      <div className="rounded-md border border-[var(--border)] bg-white px-3 py-3">
-                        <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Rule source_type</p>
-                        <p className="mt-1 font-mono text-sm font-semibold text-slate-900">{displaySourceType(sourceTypeAudit?.rule_source_type)}</p>
-                        {sourceTypeAudit ? <p className="text-xs text-slate-500">confidence: {sourceTypeAudit.rule_confidence.toFixed(3)}</p> : null}
-                      </div>
-                      <label className="space-y-1 text-sm text-slate-700 lg:col-span-2">
-                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Ground Truth source_type</span>
-                        <div className="flex flex-wrap gap-2">
-                          <select
-                            value={sourceTypeGroundTruth}
-                            disabled={!parsingResultId}
-                            onChange={(event) =>
-                              setSourceTypeGroundTruthByParsingId((current) => ({
-                                ...current,
-                                [parsingResultId]: event.target.value as OCRTestSourceType | "",
-                              }))
-                            }
-                            className="h-11 min-w-[220px] flex-1 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none ring-[var(--ring)] focus:ring-2 disabled:bg-slate-100"
-                          >
-                            <option value="">未設定</option>
-                            {SOURCE_TYPE_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                          <Button
-                            onClick={() => handleSaveSourceTypeGroundTruth(parsingResultId)}
-                            disabled={!parsingResultId || savingSourceTypeGroundTruthId === parsingResultId}
-                            className="bg-slate-900 text-white"
-                          >
-                            {savingSourceTypeGroundTruthId === parsingResultId ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
-                            保存
-                          </Button>
-                        </div>
-                      </label>
-                    </div>
-                    <div className="mt-3">
-                      <SourceTypeAuditView value={sourceTypeAudit} />
-                    </div>
-                  </div>
-                  <div className="grid gap-3 lg:grid-cols-2">
-                    <div>
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">OCR</p>
-                      <Textarea readOnly value={item.ocr_text ?? ""} className="min-h-[180px] font-mono text-xs leading-6" />
-                    </div>
-                    <div className="space-y-3">
-                      <div>
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">attached_image_candidate evaluation</p>
-                        <p className="mb-2 text-xs text-slate-500">Xスクショ内の添付画像 bbox 候補です。まず recall を目視評価します。</p>
-                        <AttachedImageCandidateOverlay
-                          imageUrl={previewUrls[index]}
-                          imageWidth={imageWidth}
-                          imageHeight={imageHeight}
-                          candidates={attachedImageCandidates}
-                        />
-                      </div>
-                      <div>
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">source_kind</p>
-                        <JsonView value={item.source_kind ?? {}} />
-                      </div>
-                      <div>
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">structured_data</p>
-                        <JsonView value={item.structured_data ?? {}} />
-                      </div>
-                      <div>
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">document_structure</p>
-                        <JsonView value={item.document_structure ?? {}} />
-                      </div>
-                      <div>
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">ocr_tokens</p>
-                        <JsonView value={item.ocr_tokens ?? []} />
-                      </div>
-                      <div>
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">event_candidates</p>
-                        <JsonView value={item.event_candidates ?? []} />
-                      </div>
-                      <div>
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">live_sessions</p>
-                        <JsonView value={item.live_sessions ?? []} />
-                      </div>
-                      <div>
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">meet_and_greet_sessions</p>
-                        <JsonView value={item.meet_and_greet_sessions ?? []} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
                 );
-              })
-            ) : (
-              <p className="text-sm text-[var(--muted)]">まだ結果がありません。</p>
+              })}
+            </div>
+            {currentStep === "ocr" && (
+              <p className="mt-3 text-xs text-slate-500">
+                OCR処理はbackend側で同期実行中です。完了後にSession集約と候補準備へ進みます。
+              </p>
             )}
           </div>
-          {sourceTypeGroundTruthMessage ? <p className="text-sm text-emerald-700">{sourceTypeGroundTruthMessage}</p> : null}
-        </Card>
+        )}
+      </Card>
 
-        <Card className="space-y-4 lg:col-span-2">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+      {result && (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <Card className="space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Step 2</p>
+                <h2 className="mt-1 text-xl font-bold text-slate-950">OCR / Upload Session Result</h2>
+              </div>
+              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">完了</span>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-xl bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">source_id</p>
+                <p className="mt-1 break-all text-sm font-semibold text-slate-900">{result.source.id}</p>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">upload_session_id</p>
+                <p className="mt-1 break-all text-sm font-semibold text-slate-900">{session?.id ?? result.result.session_id ?? "-"}</p>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">画像数</p>
+                <p className="mt-1 text-sm font-semibold text-slate-900">{files.length}枚</p>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">処理時間</p>
+                <p className="mt-1 text-sm font-semibold text-slate-900">{formatMs(result.result.processing_time_ms)}</p>
+              </div>
+            </div>
+
+            {sessionItems.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-sm font-bold text-slate-900">画像ごとの判定</h3>
+                <div className="overflow-hidden rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 text-xs uppercase tracking-[0.14em] text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2">#</th>
+                        <th className="px-3 py-2">source_type</th>
+                        <th className="px-3 py-2">event_name</th>
+                        <th className="px-3 py-2">confidence</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {sessionItems.map((item, index) => (
+                        <tr key={item.id}>
+                          <td className="px-3 py-2 text-slate-500">{index + 1}</td>
+                          <td className="px-3 py-2 font-semibold text-slate-900">{item.source_type}</td>
+                          <td className="px-3 py-2 text-slate-700">{item.event_name ?? "-"}</td>
+                          <td className="px-3 py-2 text-slate-700">{formatPercent(item.confidence)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <details className="rounded-xl border border-slate-200 bg-white">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-slate-900">OCR raw text</summary>
+              <pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t border-slate-200 p-4 text-sm leading-relaxed text-slate-700">
+                {rawText || "raw_text がありません"}
+              </pre>
+            </details>
+          </Card>
+
+          <Card className="space-y-4">
             <div>
-              <h2 className="text-base font-semibold">4. Vision Evaluation</h2>
-              <p className="mt-1 text-sm text-[var(--muted)]">
-                同じ画像に対して GPT-4o / GPT-5-mini / GPT-5 を再実行し、精度・速度・トークン数・コストを比較します。
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Step 3</p>
+              <h2 className="mt-1 text-xl font-bold text-slate-950">Event Candidate</h2>
+              <p className="mt-2 text-sm text-slate-600">
+                候補が弱い場合でもレビュー画面へ送り、人間が補完してGround Truth化できます。
               </p>
             </div>
-            {visionEvaluationMessage ? <p className="text-sm text-emerald-700">{visionEvaluationMessage}</p> : null}
-          </div>
 
-          <div className="space-y-3">
-            {session?.items?.length ? (
-              session.items.map((item, index) => (
-                <div key={item.id} className="rounded-lg border border-[var(--border)] bg-white p-4">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            {reviewCandidate ? (
+              <div className="space-y-3">
+                {isManualReviewCandidate && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    Canonical Event Candidate は生成されませんでした。OCR出力を初期値にした手動レビュー候補として送信できます。
+                  </div>
+                )}
+
+                <div className={`rounded-2xl border p-4 ${isManualReviewCandidate ? "border-amber-100 bg-amber-50" : "border-sky-100 bg-sky-50"}`}>
+                  <p className={`text-xs font-bold uppercase tracking-[0.18em] ${isManualReviewCandidate ? "text-amber-700" : "text-sky-700"}`}>
+                    {isManualReviewCandidate ? "manual ground truth candidate" : "canonical event candidate"}
+                  </p>
+                  <dl className="mt-3 space-y-3">
                     <div>
-                      <p className="text-sm font-semibold text-slate-900">画像 {index + 1}</p>
-                      <p className="font-mono text-xs text-slate-500">session_item_id: {item.id}</p>
-                      <p className="font-mono text-xs text-slate-500">image_id: {item.image_id ?? "-"}</p>
+                      <dt className="text-xs font-semibold text-slate-500">event_name</dt>
+                      <dd className="mt-1 text-base font-bold text-slate-950">{reviewCandidate.event_name ?? "-"}</dd>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {VISION_EVALUATION_MODELS.map((modelName) => {
-                        const key = `${item.id}:${modelName}`;
-                        return (
-                          <Button
-                            key={modelName}
-                            onClick={() => handleRunVisionEvaluation(item.id, modelName)}
-                            disabled={runningVisionEvaluationKey !== null}
-                            className="bg-slate-900 text-white"
-                          >
-                            {runningVisionEvaluationKey === key ? <Loader2 size={15} className="animate-spin" /> : <ScanSearch size={15} />}
-                            Run {modelName}
-                          </Button>
-                        );
-                      })}
+                    <div>
+                      <dt className="text-xs font-semibold text-slate-500">event_date</dt>
+                      <dd className="mt-1 text-base font-bold text-slate-950">{reviewCandidate.event_date ?? "-"}</dd>
                     </div>
-                  </div>
+                    <div>
+                      <dt className="text-xs font-semibold text-slate-500">venue_name</dt>
+                      <dd className="mt-1 text-base font-bold text-slate-950">{reviewCandidate.venue_name ?? "-"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-semibold text-slate-500">confidence</dt>
+                      <dd className="mt-1 text-base font-bold text-slate-950">{formatPercent(reviewCandidate.confidence)}</dd>
+                    </div>
+                  </dl>
                 </div>
-              ))
-            ) : (
-              <p className="text-sm text-[var(--muted)]">評価対象のUpload Session Itemがまだありません。</p>
-            )}
-          </div>
 
-          <div className="overflow-x-auto rounded-lg border border-[var(--border)] bg-white">
-            <table className="min-w-full divide-y divide-[var(--border)] text-sm">
-              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">model</th>
-                  <th className="px-3 py-2">image</th>
-                  <th className="px-3 py-2">latency</th>
-                  <th className="px-3 py-2">tokens</th>
-                  <th className="px-3 py-2">cost</th>
-                  <th className="px-3 py-2">live</th>
-                  <th className="px-3 py-2">meet</th>
-                  <th className="px-3 py-2">called</th>
-                  <th className="px-3 py-2">human_score</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--border)]">
-                {session?.vision_evaluation_runs?.length ? (
-                  session.vision_evaluation_runs.map((run) => (
-                    <tr key={run.id}>
-                      <td className="px-3 py-2 font-mono font-semibold text-slate-900">{run.model_name}</td>
-                      <td className="px-3 py-2 font-mono text-xs text-slate-600">{run.image_id ?? run.session_item_id ?? "-"}</td>
-                      <td className="px-3 py-2">{run.latency_ms ?? "-"} ms</td>
-                      <td className="px-3 py-2">{run.total_tokens ?? "-"}</td>
-                      <td className="px-3 py-2">{run.estimated_cost != null ? `$${run.estimated_cost.toFixed(6)}` : "-"}</td>
-                      <td className="px-3 py-2">{run.live_session_count}</td>
-                      <td className="px-3 py-2">{run.meet_and_greet_count}</td>
-                      <td className="px-3 py-2">{run.vision_called ? "yes" : "no"}</td>
-                      <td className="px-3 py-2">
-                        <select
-                          value={run.human_score ?? ""}
-                          disabled={savingVisionScoreRunId === run.id}
-                          onChange={(event) => handleUpdateVisionScore(run.id, event.target.value)}
-                          className="h-9 rounded-md border border-[var(--border)] bg-white px-2 text-sm outline-none ring-[var(--ring)] focus:ring-2"
-                        >
-                          <option value="">未評価</option>
-                          {[1, 2, 3, 4, 5].map((score) => (
-                            <option key={score} value={score}>
-                              {score}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={9} className="px-3 py-6 text-center text-sm text-[var(--muted)]">
-                      Vision評価runはまだありません。
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-lg border border-[var(--border)] bg-slate-50 p-4">
-              <CardHeader title="Vision Evaluation Output JSON" copyText={JSON.stringify(session?.vision_evaluation_runs ?? [], null, 2)} />
-              <JsonView value={session?.vision_evaluation_runs ?? []} />
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-slate-50 p-4">
-              <CardHeader
-                title="Vision Routing Logs"
-                copyText={JSON.stringify(
-                  (session?.vision_evaluation_runs ?? []).map((run) => ({
-                    model_name: run.model_name,
-                    vision_called: run.vision_called,
-                    vision_live_session_count: run.live_session_count,
-                    vision_meet_and_greet_count: run.meet_and_greet_count,
-                  })),
-                  null,
-                  2
-                )}
-              />
-              <JsonView
-                value={(session?.vision_evaluation_runs ?? []).map((run) => ({
-                  model_name: run.model_name,
-                  vision_called: run.vision_called,
-                  vision_live_session_count: run.live_session_count,
-                  vision_meet_and_greet_count: run.meet_and_greet_count,
-                }))}
-              />
-            </div>
-          </div>
-        </Card>
-
-        <Card className="space-y-3">
-          <CardHeader title="5. Session Aggregation" copyText={JSON.stringify(sessionAggregation, null, 2)} />
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">event_candidates</p>
-            {aggregatedEventCandidates.length ? (
-              <div className="space-y-2">
-                {aggregatedEventCandidates.map((candidate, index) => (
-                  <div key={`${candidate.event_name ?? "candidate"}-${index}`} className="rounded-md border border-[var(--border)] bg-white p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="font-semibold text-slate-900">{candidate.event_name ?? "-"}</p>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-600">#{index + 1}</span>
-                    </div>
-                    <p className="mt-1 text-sm text-slate-600">
-                      {candidate.event_date ?? "-"} / {candidate.venue_name ?? "-"}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      source_type: {displaySourceType(candidate.source_type)} / confidence: {candidate.confidence}
-                    </p>
+                {reviewCandidate.reasons.length > 0 && (
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">reasons</p>
+                    <ul className="mt-2 space-y-1 text-sm text-slate-700">
+                      {reviewCandidate.reasons.map((reason, index) => (
+                        <li key={`${reason}-${index}`}>{reason}</li>
+                      ))}
+                    </ul>
                   </div>
-                ))}
+                )}
+
+                <Button type="button" onClick={handleOpenReview} className="w-full bg-sky-700 hover:bg-sky-800">
+                  <Check className="h-4 w-4" />
+                  Event Candidate Reviewへ送る
+                </Button>
               </div>
             ) : (
-              <p className="rounded-md border border-dashed border-[var(--border)] bg-white p-3 text-sm text-[var(--muted)]">event_candidates はまだありません。</p>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                セッション単位のイベント候補が生成されていません。OCR raw textを確認し、候補生成ロジックの改善対象として扱ってください。
+              </div>
             )}
-          </div>
-          <JsonView value={sessionAggregation} />
-        </Card>
+          </Card>
+        </div>
+      )}
 
+      {result && (
         <Card className="space-y-3">
-          <CardHeader title="5-1. Canonical Event Candidate" copyText={JSON.stringify(canonicalEventCandidate ?? null, null, 2)} />
-          <JsonView value={canonicalEventCandidate ?? null} />
-        </Card>
-
-        <Card className="space-y-4 lg:col-span-2">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold">6. Event Ground Truth</h2>
-              <p className="mt-1 text-sm text-[var(--muted)]">イベント単位の正解です。source_type は画像単位のため Image Candidates 側で管理します。</p>
-            </div>
-            {result?.result.ground_truth ? (
-              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">保存済み</span>
-            ) : (
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">未保存</span>
-            )}
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1 text-sm text-slate-700">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">event_name</span>
-              <Input value={groundTruthForm.event_name} onChange={(event) => setGroundTruthForm((current) => ({ ...current, event_name: event.target.value }))} placeholder="実際のイベント名" />
-            </label>
-            <label className="space-y-1 text-sm text-slate-700">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">event_date</span>
-              <Input type="date" value={groundTruthForm.event_date} onChange={(event) => setGroundTruthForm((current) => ({ ...current, event_date: event.target.value }))} />
-            </label>
-            <label className="space-y-1 text-sm text-slate-700 sm:col-span-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">venue_name</span>
-              <Input value={groundTruthForm.venue_name} onChange={(event) => setGroundTruthForm((current) => ({ ...current, venue_name: event.target.value }))} placeholder="実際の会場名" />
-            </label>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={handleSaveGroundTruth} disabled={!selectedGroundTruthParsingResultId || isSavingGroundTruth} className="w-full sm:w-auto">
-              {isSavingGroundTruth ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-              {isSavingGroundTruth ? "保存中..." : "Event Ground Truth を保存"}
-            </Button>
-            {groundTruthMessage ? <p className="text-sm text-emerald-700">{groundTruthMessage}</p> : null}
-          </div>
-        </Card>
-
-        <Card className="space-y-3 lg:col-span-2">
-          <CardHeader
-            title="7. Event Core Resolver"
-            copyText={JSON.stringify(
-              {
-                canonical_event_candidate: canonicalEventCandidate ?? null,
-                event_core_candidates: eventCoreResolution?.event_core_candidates ?? [],
-                selected_event_core_candidate: selectedEventCoreCandidate ?? null,
-              },
-              null,
-              2
-            )}
-          />
-          <div className="space-y-3">
-            {eventCoreResolution?.event_core_candidates?.length ? (
-              eventCoreResolution.event_core_candidates.map((candidate) => {
-                const isSelected = candidate.event_core_id === selectedEventCoreCandidateId;
-                return (
-                  <div key={candidate.event_core_id} className={`rounded-lg border bg-white p-4 ${isSelected ? "border-indigo-400 ring-2 ring-indigo-100" : "border-[var(--border)]"}`}>
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-semibold text-slate-900">{candidate.event_name}</p>
-                          {isSelected ? <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-700">選択中</span> : null}
-                        </div>
-                        <p className="text-sm text-slate-600">
-                          {candidate.event_date} / {candidate.venue_name ?? "-"}
-                        </p>
-                        <p className="text-xs text-slate-500">score: {candidate.match_score.toFixed(3)}</p>
-                        <p className="text-xs text-slate-500">{candidate.match_reasons.join(", ") || "理由なし"}</p>
-                      </div>
-                      <Button
-                        className={isSelected ? "bg-indigo-600 text-white" : "bg-[var(--foreground)] text-white"}
-                        onClick={() => {
-                          setSelectedEventCoreCandidateId(candidate.event_core_id);
-                          setConfirmMode("link_existing");
-                        }}
-                      >
-                        {isSelected ? "選択済み" : "この候補を使う"}
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <p className="text-sm text-[var(--muted)]">Event Core 候補はまだありません。新規作成で進められます。</p>
-            )}
-          </div>
-          <div className="rounded-lg border border-[var(--border)] bg-slate-50 p-4">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">選択中のEvent Core候補</p>
-            <JsonView value={selectedEventCoreCandidate ?? null} />
-          </div>
-        </Card>
-
-        <Card className="space-y-4 lg:col-span-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold">8. Human Review</h2>
-              <p className="mt-1 text-sm text-[var(--muted)]">AI抽出結果を直接上書きせず、修正履歴を revision として残します。</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Debug</p>
+              <h2 className="mt-1 text-lg font-bold text-slate-950">必要最小限のJSON</h2>
+              <p className="mt-1 text-sm text-slate-600">Extractor改善に渡すための確認用です。通常のGround Truth入力では触りません。</p>
             </div>
-            {session?.revisions?.length ? (
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">revision {session.revisions[session.revisions.length - 1]?.revision ?? 0}</span>
-            ) : (
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">revision なし</span>
-            )}
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1 text-sm text-slate-700">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">event_name</span>
-              <Input value={reviewForm.event_name} onChange={(event) => setReviewForm((current) => ({ ...current, event_name: event.target.value }))} placeholder="修正後のイベント名" />
-            </label>
-            <label className="space-y-1 text-sm text-slate-700">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">event_date</span>
-              <Input type="date" value={reviewForm.event_date} onChange={(event) => setReviewForm((current) => ({ ...current, event_date: event.target.value }))} />
-            </label>
-            <label className="space-y-1 text-sm text-slate-700 sm:col-span-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">venue_name</span>
-              <Input value={reviewForm.venue_name} onChange={(event) => setReviewForm((current) => ({ ...current, venue_name: event.target.value }))} placeholder="修正後の会場名" />
-            </label>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={handleSaveReview} disabled={!session?.id || isSavingReview} className="w-full sm:w-auto">
-              {isSavingReview ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-              {isSavingReview ? "保存中..." : "修正内容を保存"}
+            <Button type="button" onClick={handleCopyDebugJson} className="bg-slate-800">
+              <ClipboardCopy className="h-4 w-4" />
+              {copyState === "copied" ? "コピー済み" : "JSONをコピー"}
             </Button>
-            {reviewMessage ? <p className="text-sm text-emerald-700">{reviewMessage}</p> : null}
           </div>
-        </Card>
-
-        <Card className="space-y-4 lg:col-span-2">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold">9. Timetable Human Review</h2>
-              <p className="mt-1 text-sm text-[var(--muted)]">
-                Vision Structure Extraction の結果を確認し、live_sessions / meet_and_greet_sessions を追加・編集・削除・複製・並び替えできます。
-              </p>
+          <details className="rounded-xl border border-slate-200 bg-white">
+            <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-slate-900">debug jsonを表示</summary>
+            <div className="border-t border-slate-200 p-4">
+              <JsonBlock value={{ source: result.source, session, aggregation, canonical_event_candidate: canonicalCandidate, ocr_output: ocrOutput }} />
             </div>
-            {session?.timetable_review?.latest_revision ? (
-              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                revision {session.timetable_review.latest_revision.revision}
-              </span>
-            ) : (
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">未レビュー</span>
-            )}
-          </div>
-
-          <div className="grid gap-4 xl:grid-cols-2">
-            <TimetableReviewEditor title="live_sessions" itemKind="live" items={liveSessionRows} onChange={setLiveSessionRows} />
-            <TimetableReviewEditor title="meet_and_greet_sessions" itemKind="meet_and_greet" items={meetAndGreetRows} onChange={setMeetAndGreetRows} />
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-lg border border-[var(--border)] bg-slate-50 p-4">
-              <CardHeader title="Vision Structure Extraction" copyText={JSON.stringify(session?.vision_structure_extractions ?? [], null, 2)} />
-              <JsonView value={session?.vision_structure_extractions ?? []} />
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-slate-50 p-4">
-              <CardHeader title="Timetable Revision history" copyText={JSON.stringify(session?.timetable_review?.revisions ?? [], null, 2)} />
-              <JsonView value={session?.timetable_review?.revisions ?? []} />
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={handleSaveTimetableReview} disabled={!session?.id || isSavingTimetableReview} className="w-full sm:w-auto">
-              {isSavingTimetableReview ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-              {isSavingTimetableReview ? "保存中..." : "Timetableレビューを保存"}
-            </Button>
-            {timetableReviewMessage ? <p className="text-sm text-emerald-700">{timetableReviewMessage}</p> : null}
-          </div>
+          </details>
         </Card>
-
-        <Card className="space-y-4 lg:col-span-2">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold">10. Event Core確定</h2>
-              <p className="mt-1 text-sm text-[var(--muted)]">既存の Event Core に紐付けるか、新規作成して確定します。</p>
-            </div>
-            <div className="flex items-center gap-2 text-sm">
-              <button
-                type="button"
-                onClick={() => setConfirmMode("create_new")}
-                className={`rounded-full px-3 py-1 ${confirmMode === "create_new" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700"}`}
-              >
-                新規 Event Core作成
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmMode("link_existing")}
-                className={`rounded-full px-3 py-1 ${confirmMode === "link_existing" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700"}`}
-              >
-                既存 Event Coreに紐付け
-              </button>
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-[var(--border)] bg-white p-4">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">確定対象</p>
-            <JsonView value={canonicalEventCandidate ?? null} />
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              onClick={handleConfirmEventCore}
-              disabled={
-                isConfirmingEventCore ||
-                (confirmMode === "link_existing" && !selectedEventCoreCandidateId) ||
-                (confirmMode === "create_new" && (!reviewForm.event_name || !reviewForm.event_date || !reviewForm.venue_name))
-              }
-              className="w-full sm:w-auto"
-            >
-              {isConfirmingEventCore ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-              {isConfirmingEventCore ? "確定中..." : "Event Core を確定"}
-            </Button>
-            <p className="text-sm text-[var(--muted)]">AI結果は保持され、修正と確定の履歴が revision として積み上がります。</p>
-          </div>
-
-          <div className="rounded-lg border border-[var(--border)] bg-slate-50 p-4">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Revision history</p>
-            <JsonView value={session?.revisions ?? []} />
-          </div>
-        </Card>
-
-        <Card className="space-y-3">
-          <CardHeader
-            title="Supplemental: Legacy Event Core Search Result"
-            copyText={JSON.stringify(
-              resolution?.duplicate_candidates?.length ? { ...eventCoreSearchResult, duplicate_candidates: resolution.duplicate_candidates } : eventCoreSearchResult,
-              null,
-              2
-            )}
-          />
-          <JsonView value={eventCoreSearchResult} />
-          {resolution?.duplicate_candidates?.length ? <JsonView value={resolution.duplicate_candidates} /> : null}
-        </Card>
-
-        <Card className="space-y-3">
-          <CardHeader title="Supplemental: Legacy Creation Result" copyText={JSON.stringify(creationResult, null, 2)} />
-          <JsonView value={creationResult} />
-        </Card>
-
-        <Card className="space-y-3">
-          <CardHeader
-            title="Supplemental: Debug Info"
-            copyText={JSON.stringify(
-              {
-                source_id: result?.source.id ?? null,
-                event_id: result?.result.event_id ?? null,
-                session_id: result?.result.session_id ?? null,
-                raw_input_ids: result?.result.raw_input_ids ?? [],
-                parsing_result_id: result?.result.parsing_result_id ?? null,
-                parsing_result_ids: result?.result.parsing_result_ids ?? [],
-                dry_run: result?.result.dry_run ?? false,
-              },
-              null,
-              2
-            )}
-          />
-          <JsonView
-            value={{
-              source_id: result?.source.id ?? null,
-              event_id: result?.result.event_id ?? null,
-              session_id: result?.result.session_id ?? null,
-              raw_input_ids: result?.result.raw_input_ids ?? [],
-              parsing_result_id: result?.result.parsing_result_id ?? null,
-              parsing_result_ids: result?.result.parsing_result_ids ?? [],
-              dry_run: result?.result.dry_run ?? false,
-            }}
-          />
-        </Card>
-
-        <Card className="space-y-3 lg:col-span-2">
-          <CardHeader title="NDLOCR JSON" copyText={JSON.stringify(primaryAsset?.parsed?.canonical_document ?? primaryAsset?.parsed ?? [], null, 2)} />
-          <p className="text-sm text-[var(--muted)]">`true` が OCR本文なのか JSON の補助情報なのかを確認するための生出力です。</p>
-          <JsonView value={primaryAsset?.parsed?.canonical_document ?? primaryAsset?.parsed ?? []} />
-        </Card>
-      </div>
+      )}
     </div>
   );
 }

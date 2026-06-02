@@ -1,11 +1,12 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, ClipboardCopy, ImageIcon, Loader2, UploadCloud } from "lucide-react";
+import { ChevronDown, ChevronRight, ClipboardCopy, ImageIcon, Loader2, Send, UploadCloud } from "lucide-react";
 import { ApiError } from "@/api/client";
 import {
   evaluateOCRImages,
   getOCREvaluationJob,
+  type OCREvaluationEventAggregateCandidate,
   type OCREvaluationJobResponse,
   type OCREvaluationResultItem,
 } from "@/api/admin-ocr";
@@ -15,6 +16,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
 const ACCEPT = ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp";
+const EVENT_CANDIDATE_REVIEW_BUNDLE_KEY = "oshi_sche_event_candidate_review_bundle";
 
 interface BBoxCandidate {
   bbox: {
@@ -25,6 +27,27 @@ interface BBoxCandidate {
   };
   confidence?: number;
   reasons?: string[];
+}
+
+interface EventCandidateReviewSourceImage {
+  filename: string;
+  source_kind: string;
+  region_kinds: string[];
+  image_data_url?: string;
+  image_features: OCREvaluationResultItem["image_features"];
+}
+
+interface EventCandidateReviewBundleItem {
+  id: string;
+  filename: string;
+  source_images: EventCandidateReviewSourceImage[];
+  event_aggregate_candidate: OCREvaluationEventAggregateCandidate;
+}
+
+interface EventCandidateReviewBundle {
+  created_at: string;
+  summary: OCREvaluationJobResponse["summary"];
+  items: EventCandidateReviewBundleItem[];
 }
 
 function JsonView({ value }: { value: unknown }) {
@@ -139,6 +162,23 @@ function regionKindSummary(item: OCREvaluationResultItem): string {
     .join(", ");
 }
 
+function regionKinds(item: OCREvaluationResultItem): string[] {
+  return Array.from(new Set(item.region_semantics.map((region) => region.semantic?.kind || "unknown"))).filter(Boolean);
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("画像の読み込みに失敗しました"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function eventAggregateCount(result: OCREvaluationJobResponse | null): number {
+  return result?.results.reduce((sum, item) => sum + (item.event_aggregate_candidates?.length ?? 0), 0) ?? 0;
+}
+
 function eventInfoSummary(item: OCREvaluationResultItem): string {
   if (!item.event_info_candidates?.length) return "-";
   return item.event_info_candidates
@@ -191,6 +231,7 @@ export default function AdminOCREvaluationPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reviewExportError, setReviewExportError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!selectedFiles.length) {
@@ -209,6 +250,7 @@ export default function AdminOCREvaluationPage() {
 
   const isJobActive = result?.status === "queued" || result?.status === "running";
   const progressPercent = result?.total ? Math.round((result.completed / result.total) * 100) : 0;
+  const aggregateCount = eventAggregateCount(result);
 
   useEffect(() => {
     if (!result?.job_id || !isJobActive) return;
@@ -228,7 +270,14 @@ export default function AdminOCREvaluationPage() {
   }, [isJobActive, result?.job_id]);
 
   function setFiles(files: File[]) {
-    setSelectedFiles(files.slice(0, 100));
+    if (files.length > 100) {
+      setSelectedFiles([]);
+      setResult(null);
+      setError("OCR Evaluation Labは最大100枚までです。教師データ作成はOCR Ground Truthから最大4枚で実行してください。");
+      setExpandedRows(new Set());
+      return;
+    }
+    setSelectedFiles(files);
     setResult(null);
     setError(null);
     setExpandedRows(new Set());
@@ -264,6 +313,61 @@ export default function AdminOCREvaluationPage() {
     }
   }
 
+  async function handleOpenReview() {
+    if (!result || aggregateCount === 0) return;
+    setReviewExportError(null);
+
+    let imageDataUrls: string[] = [];
+    try {
+      imageDataUrls = await Promise.all(selectedFiles.map((file) => readFileAsDataUrl(file)));
+    } catch {
+      imageDataUrls = [];
+    }
+
+    const items = result.results.flatMap((item, resultIndex) => {
+      const sourceImage: EventCandidateReviewSourceImage = {
+        filename: item.filename,
+        source_kind: sourceKindName(item.source_kind),
+        region_kinds: regionKinds(item),
+        image_data_url: imageDataUrls[resultIndex],
+        image_features: item.image_features,
+      };
+      return (item.event_aggregate_candidates ?? []).map((candidate, candidateIndex) => ({
+        id: `${item.filename}-${resultIndex}-${candidateIndex}`,
+        filename: item.filename,
+        source_images: [sourceImage],
+        event_aggregate_candidate: candidate,
+      }));
+    });
+
+    const bundle: EventCandidateReviewBundle = {
+      created_at: new Date().toISOString(),
+      summary: result.summary,
+      items,
+    };
+
+    try {
+      sessionStorage.setItem(EVENT_CANDIDATE_REVIEW_BUNDLE_KEY, JSON.stringify(bundle));
+    } catch {
+      const lightweightBundle: EventCandidateReviewBundle = {
+        ...bundle,
+        items: bundle.items.map((item) => ({
+          ...item,
+          source_images: item.source_images.map((image) => ({ ...image, image_data_url: undefined })),
+        })),
+      };
+      try {
+        sessionStorage.setItem(EVENT_CANDIDATE_REVIEW_BUNDLE_KEY, JSON.stringify(lightweightBundle));
+        setReviewExportError("画像データが大きいため、レビュー画面には画像なしで候補を送信しました。");
+      } catch {
+        setReviewExportError("レビュー画面へ送るデータの保存に失敗しました。候補数または画像サイズを減らしてください。");
+        return;
+      }
+    }
+
+    window.location.href = "/admin/event-candidate-review";
+  }
+
   function toggleRow(index: number) {
     setExpandedRows((current) => {
       const next = new Set(current);
@@ -278,9 +382,13 @@ export default function AdminOCREvaluationPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="OCR Evaluation" subtitle="SourceKind / LayoutGraph / RegionFeatures / RegionSemantic を一括評価します。" backHref="/admin" />
+      <PageHeader title="OCR Evaluation Lab" subtitle="SourceKind / LayoutGraph / RegionFeatures / RegionSemantic の研究用一括評価です。教師データ作成の入口ではありません。" backHref="/admin" />
 
       <Card className="space-y-4">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-semibold">教師データ作成は OCR Ground Truth から行ってください。</p>
+          <p className="mt-1">この画面は20〜100枚単位で傾向を見る評価Labです。Upload Session / Ground Truth は1〜4枚の正規導線で作成します。</p>
+        </div>
         <div
           onDrop={handleDrop}
           onDragOver={(event) => {
@@ -294,14 +402,13 @@ export default function AdminOCREvaluationPage() {
         >
           <UploadCloud className="mx-auto mb-3 text-slate-400" size={32} />
           <p className="font-semibold text-slate-900">画像をドラッグ＆ドロップ</p>
-          <p className="mt-1 text-sm text-slate-500">最大100枚まで一括評価できます。</p>
+          <p className="mt-1 text-sm text-slate-500">評価Labとして最大100枚まで一括評価できます。</p>
           <Input type="file" accept={ACCEPT} multiple onChange={(event) => handleFileInput(event.currentTarget.files)} className="mx-auto mt-4 max-w-xl" />
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-sm text-slate-600">
             <span className="font-semibold text-slate-900">{fileSummary}</span>
-            {selectedFiles.length > 100 ? <span className="ml-2 text-red-600">100枚に切り詰めます</span> : null}
           </div>
           <Button onClick={handleEvaluate} disabled={!selectedFiles.length || isSubmitting || isJobActive} className="bg-slate-900 text-white">
             {isSubmitting || isJobActive ? <Loader2 size={16} className="animate-spin" /> : <ImageIcon size={16} />}
@@ -370,6 +477,20 @@ export default function AdminOCREvaluationPage() {
               <JsonView value={result.summary} />
             </Card>
           </div>
+
+          <Card className="flex flex-wrap items-center justify-between gap-3 border-sky-100 bg-sky-50">
+            <div>
+              <p className="font-semibold text-slate-900">Event Candidate Review</p>
+              <p className="mt-1 text-sm text-slate-600">
+                event_aggregate_candidates: <span className="font-mono font-semibold">{aggregateCount}</span> 件をレビュー画面へ送れます。
+              </p>
+              {reviewExportError ? <p className="mt-1 text-xs text-amber-700">{reviewExportError}</p> : null}
+            </div>
+            <Button onClick={handleOpenReview} disabled={!aggregateCount || isJobActive} className="bg-sky-700 text-white">
+              <Send size={16} />
+              レビュー画面へ送る
+            </Button>
+          </Card>
 
           <Card className="space-y-3">
             <div className="flex items-center justify-between">

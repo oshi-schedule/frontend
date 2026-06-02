@@ -112,6 +112,20 @@ export interface OCRTestWorkflowResponse {
   result: OCRTestReparseResult;
 }
 
+export interface OCRReparseJobResponse {
+  job_id: string;
+  source_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  progress: number;
+  message: string;
+  current_step: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  result: OCRTestWorkflowResponse | null;
+}
+
 export interface OCRTestGroundTruth {
   id: string;
   event_parsing_result_id: string;
@@ -471,6 +485,68 @@ export interface OCREvaluationJobResponse {
   results: OCREvaluationResultItem[];
 }
 
+export type EventCandidateReviewStatus = "approved" | "edited" | "rejected";
+
+export interface EventCandidateReviewCreate {
+  candidate_type: string;
+  source_id?: string | null;
+  upload_session_id?: string | null;
+  candidate_json: Record<string, unknown>;
+  original_json?: Record<string, unknown> | null;
+  edited_json?: Record<string, unknown> | null;
+  review_json: Record<string, unknown>;
+  review_status: EventCandidateReviewStatus;
+  reviewer_note?: string | null;
+}
+
+export interface EventCandidateReviewRead {
+  id: string;
+  candidate_type: string;
+  source_id: string | null;
+  upload_session_id: string | null;
+  candidate_json: Record<string, unknown>;
+  review_json: Record<string, unknown>;
+  ocr_output_json: Record<string, unknown>;
+  edited_values_json: Record<string, unknown>;
+  ground_truth_json: Record<string, unknown>;
+  review_status: EventCandidateReviewStatus | string;
+  reviewer_note: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
+export interface GroundTruthStats {
+  total: number;
+  approved: number;
+  edited: number;
+  rejected: number;
+  ready_for_training: number;
+  session_linked_reviews: number;
+  unlinked_reviews: number;
+  single_image_sessions: number;
+  multi_image_sessions: number;
+}
+
+export async function createEventCandidateReview(payload: EventCandidateReviewCreate): Promise<EventCandidateReviewRead> {
+  return apiFetch<EventCandidateReviewRead>("/admin/event-candidate-reviews", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listEventCandidateReviews(options: { limit?: number; review_status?: string | null } = {}): Promise<EventCandidateReviewRead[]> {
+  return apiFetch<EventCandidateReviewRead[]>("/admin/event-candidate-reviews", {
+    query: {
+      limit: options.limit ?? 100,
+      review_status: options.review_status,
+    },
+  });
+}
+
+export async function getGroundTruthStats(): Promise<GroundTruthStats> {
+  return apiFetch<GroundTruthStats>("/admin/ground-truth/stats");
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -507,6 +583,16 @@ export function reparseSourceForOCRTest(sourceId: string) {
   return apiFetch<OCRTestWorkflowResponse>(`/sources/${sourceId}/reparse`, {
     method: "POST",
   });
+}
+
+export function startOCRReparseJob(sourceId: string) {
+  return apiFetch<OCRReparseJobResponse>(`/sources/${sourceId}/reparse-jobs`, {
+    method: "POST",
+  });
+}
+
+export function getOCRReparseJob(jobId: string) {
+  return apiFetch<OCRReparseJobResponse>(`/sources/reparse-jobs/${jobId}`);
 }
 
 export function evaluateOCRImages(files: File[]) {

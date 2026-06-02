@@ -76,8 +76,10 @@ export default function AdminDashboardPage() {
           { href: "/admin/events/new", label: "新規イベント登録", desc: "イベントとタイムテーブルを作成" },
           { href: "/admin/merge", label: "Merge", desc: "Group / Venue / Event を統合" },
           { href: "/admin/sources", label: "Source確認", desc: "OCR投入待ちのSourceを確認" },
-          { href: "/admin/ocr-test", label: "OCR Test", desc: "画像から OCR と Event Core解決結果を検証" },
-          { href: "/admin/ocr-evaluation", label: "OCR Evaluation", desc: "SourceKind / LayoutGraph / RegionSemantic を一括評価" },
+          { href: "/admin/ocr-test", label: "OCR Ground Truth", desc: "Upload Session単位でOCR・レビュー・教師データ作成" },
+          { href: "/admin/event-candidate-review", label: "Event Candidate Review", desc: "OCR由来のイベント候補を採用・修正・却下" },
+          { href: "/admin/event-candidate-reviews", label: "Review Logs", desc: "イベント候補レビュー履歴を分析用に確認" },
+          { href: "/admin/ocr-evaluation", label: "OCR Evaluation Lab", desc: "100枚までのSourceKind / LayoutGraph一括評価。教師データ入口ではありません" },
         ].map(({ href, label, desc }) => (
           <Link key={href} href={href}>
             <Card className="p-4 hover:shadow-md transition-shadow cursor-pointer h-full">
