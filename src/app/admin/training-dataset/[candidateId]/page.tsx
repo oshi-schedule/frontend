@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCopy, Loader2, Maximize2, Plus, Save, Trash2, X } from "lucide-react";
 import { ApiError, apiUrl } from "@/api/client";
 import {
@@ -273,6 +273,8 @@ export default function TrainingDatasetReviewPage() {
   const [reviewNote, setReviewNote] = useState("");
   const [reviewStartedAt, setReviewStartedAt] = useState(() => Date.now());
   const [imageModalIndex, setImageModalIndex] = useState<number | null>(null);
+  const shortcutPrefixRef = useRef<string | null>(null);
+  const shortcutTimerRef = useRef<number | null>(null);
   const [benchmarkRuns, setBenchmarkRuns] = useState<TrainingCandidateBenchmarkRunRead[]>([]);
   const [benchmarkJob, setBenchmarkJob] = useState<TrainingBenchmarkJobRead | null>(null);
   const [isBenchmarking, setIsBenchmarking] = useState(false);
@@ -477,6 +479,20 @@ export default function TrainingDatasetReviewPage() {
   }
 
   useEffect(() => {
+    function clearShortcutPrefix() {
+      shortcutPrefixRef.current = null;
+      if (shortcutTimerRef.current !== null) {
+        window.clearTimeout(shortcutTimerRef.current);
+        shortcutTimerRef.current = null;
+      }
+    }
+
+    function setShortcutPrefix(prefix: string) {
+      clearShortcutPrefix();
+      shortcutPrefixRef.current = prefix;
+      shortcutTimerRef.current = window.setTimeout(clearShortcutPrefix, 1200);
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName;
@@ -488,21 +504,38 @@ export default function TrainingDatasetReviewPage() {
       if (isEditing) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
+        clearShortcutPrefix();
         void handleSaveGroundTruth("stay");
         return;
       }
-      if (!event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "n") {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      const key = event.key.toLowerCase();
+      const prefix = shortcutPrefixRef.current;
+      if (!prefix && (key === "g" || key === "a")) {
         event.preventDefault();
+        setShortcutPrefix(key);
+        return;
+      }
+      if (prefix === "g" && key === "n") {
+        event.preventDefault();
+        clearShortcutPrefix();
         goToNextPending();
         return;
       }
-      if (!event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "a") {
+      if (prefix === "a" && key === "p") {
         event.preventDefault();
+        clearShortcutPrefix();
         void handleSaveGroundTruth("next");
+        return;
       }
+      if (prefix) clearShortcutPrefix();
     }
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      clearShortcutPrefix();
+      window.removeEventListener("keydown", handleKeyDown);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidate, form, pendingQueue, reviewNote, reviewStartedAt]);
 
@@ -648,7 +681,7 @@ export default function TrainingDatasetReviewPage() {
             </Button>
           </div>
         </div>
-        <p className="mt-2 text-xs text-slate-500">ショートカット: Ctrl/Cmd+S 保存 / N 次候補 / A 承認して次へ</p>
+        <p className="mt-2 text-xs text-slate-500">ショートカット: Ctrl/Cmd+S 保存 / g n 次候補 / a p 承認して次へ。入力中は無効です。</p>
       </Card>
 
       <div className="space-y-5">
