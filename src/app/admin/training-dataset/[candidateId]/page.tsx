@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCopy, Loader2, Maximize2, Plus, Save, Trash2, X } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCopy, Download, ExternalLink, Loader2, Maximize2, Plus, Save, Trash2, X } from "lucide-react";
 import { ApiError, apiUrl } from "@/api/client";
 import {
   createTrainingDatasetBenchmarkJob,
@@ -85,6 +85,14 @@ function getStringField(value: unknown, field: string): string {
   if (!value || typeof value !== "object") return "";
   const record = value as Record<string, unknown>;
   return typeof record[field] === "string" ? record[field] : "";
+}
+
+function sourceAssetImageUrl(assetId: string, download = false): string {
+  return apiUrl(`/admin/source-assets/${assetId}/image`, download ? { download: 1 } : undefined);
+}
+
+function getAssetFilename(asset: unknown, index: number): string {
+  return getStringField(asset, "filename") || `source_image_${index + 1}.jpg`;
 }
 
 function normalizeGroupCandidates(value: unknown): GroupCandidateDraft[] {
@@ -607,6 +615,12 @@ export default function TrainingDatasetReviewPage() {
     );
   }
 
+  const currentImageAsset = imageModalIndex !== null ? imageAssets[imageModalIndex] : null;
+  const currentImageAssetId = getSourceAssetId(currentImageAsset);
+  const currentImageUrl = currentImageAssetId ? sourceAssetImageUrl(currentImageAssetId) : "";
+  const currentImageDownloadUrl = currentImageAssetId ? sourceAssetImageUrl(currentImageAssetId, true) : "";
+  const currentImageFilename = imageModalIndex !== null ? getAssetFilename(currentImageAsset, imageModalIndex) : "source_image.jpg";
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -707,11 +721,14 @@ export default function TrainingDatasetReviewPage() {
                 {imageAssets.map((asset, index) => {
                   const assetId = getSourceAssetId(asset);
                   const assetRecord = asset && typeof asset === "object" ? (asset as Record<string, unknown>) : {};
+                  const imageUrl = assetId ? sourceAssetImageUrl(assetId) : "";
+                  const downloadUrl = assetId ? sourceAssetImageUrl(assetId, true) : "";
+                  const filename = getAssetFilename(asset, index);
                   return assetId ? (
                     <div key={assetId} className="min-w-0">
                       <button type="button" onClick={() => setImageModalIndex(index)} className="group relative block w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
                         <img
-                          src={apiUrl(`/admin/source-assets/${assetId}/image`)}
+                          src={imageUrl}
                           alt={`source ${index + 1}`}
                           className="aspect-square w-full object-cover transition group-hover:scale-[1.02]"
                         />
@@ -725,6 +742,25 @@ export default function TrainingDatasetReviewPage() {
                       <p className="mt-1 truncate text-[11px] text-emerald-700">
                         correct: {form.correct_item_source_types[index]?.correct_source_type || "-"}
                       </p>
+                      <div className="mt-2 flex items-center gap-2 text-[11px] font-bold">
+                        <a
+                          href={imageUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-600 hover:text-slate-950"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          開く
+                        </a>
+                        <a
+                          href={downloadUrl}
+                          download={filename}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-600 hover:text-slate-950"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          DL
+                        </a>
+                      </div>
                     </div>
                   ) : null;
                 })}
@@ -1328,6 +1364,27 @@ export default function TrainingDatasetReviewPage() {
                 image {imageModalIndex + 1} / {imageAssets.length}
               </p>
               <div className="flex items-center gap-2">
+                {currentImageAssetId ? (
+                  <>
+                    <a
+                      href={currentImageUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-100"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      開く
+                    </a>
+                    <a
+                      href={currentImageDownloadUrl}
+                      download={currentImageFilename}
+                      className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-100"
+                    >
+                      <Download className="h-4 w-4" />
+                      DL
+                    </a>
+                  </>
+                ) : null}
                 <Button
                   type="button"
                   variant="outline"
@@ -1359,7 +1416,7 @@ export default function TrainingDatasetReviewPage() {
                 const assetId = getSourceAssetId(asset);
                 return assetId ? (
                   <img
-                    src={apiUrl(`/admin/source-assets/${assetId}/image`)}
+                    src={sourceAssetImageUrl(assetId)}
                     alt={`source ${imageModalIndex + 1}`}
                     className="mx-auto max-h-none max-w-full object-contain"
                   />
