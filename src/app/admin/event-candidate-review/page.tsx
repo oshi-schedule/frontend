@@ -126,7 +126,9 @@ function candidateToOcrOutput(candidate: OCREvaluationEventAggregateCandidate): 
     venue_name: candidate.venue_name,
     open_time: candidate.open_time,
     start_time: candidate.start_time,
-    group_candidates: candidate.group_candidates,
+    group_candidates: candidate.group_candidates
+      .map(normalizeGroupCandidateValue)
+      .filter((value): value is GroupCandidateReviewValue => value !== null),
   };
 }
 
