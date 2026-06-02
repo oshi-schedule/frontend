@@ -358,6 +358,63 @@ export default function EventCandidateReviewsPage() {
         </Card>
       </div>
 
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card className="space-y-3 p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">contributor別</h2>
+            <CopyButton text={JSON.stringify(stats?.contributor_counts ?? {}, null, 2)} />
+          </div>
+          <div className="space-y-2">
+            {Object.entries(stats?.contributor_counts ?? {}).map(([contributor, count]) => (
+              <div key={contributor} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                <span className="truncate font-mono">{contributor}</span>
+                <span className="font-bold">{count}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="space-y-3 p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">reviewer別</h2>
+            <CopyButton text={JSON.stringify(stats?.reviewer_counts ?? {}, null, 2)} />
+          </div>
+          <div className="space-y-2">
+            {Object.entries(stats?.reviewer_counts ?? {}).map(([reviewer, count]) => (
+              <div key={reviewer} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                <span className="truncate font-mono">{reviewer}</span>
+                <span className="font-bold">{count}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="space-y-3 p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">review time</h2>
+            <CopyButton text={JSON.stringify(stats?.review_time_stats ?? {}, null, 2)} />
+          </div>
+          <JsonView value={stats?.review_time_stats ?? {}} />
+        </Card>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card className="space-y-3 p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">route別品質</h2>
+            <CopyButton text={JSON.stringify(stats?.route_quality_stats ?? {}, null, 2)} />
+          </div>
+          <JsonView value={stats?.route_quality_stats ?? {}} />
+        </Card>
+        <Card className="space-y-3 p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">model別品質</h2>
+            <CopyButton text={JSON.stringify(stats?.model_quality_stats ?? {}, null, 2)} />
+          </div>
+          <JsonView value={stats?.model_quality_stats ?? {}} />
+        </Card>
+      </div>
+
       <SourceTypeReviewCard
         title="Source Type Review / Images"
         description="画像ごとの predicted_source_type と ground_truth_json.correct_item_source_types を比較します。multi画像の分類器評価に使います。"

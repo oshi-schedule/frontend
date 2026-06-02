@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CheckCircle2, Loader2, Plus, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCopy, Loader2, Maximize2, Plus, Save, Trash2, X } from "lucide-react";
 import { ApiError, apiUrl } from "@/api/client";
 import {
   createTrainingDatasetBenchmarkJob,
   getTrainingDatasetCandidate,
   getTrainingDatasetBenchmarkJob,
+  listTrainingDatasetCandidates,
   listTrainingDatasetBenchmarkRuns,
   saveTrainingDatasetGroundTruth,
   type TrainingBenchmarkJobRead,
@@ -190,6 +191,24 @@ function JsonBlock({ value }: { value: unknown }) {
   );
 }
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    });
+  }
+
+  return (
+    <button type="button" onClick={handleCopy} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-500 hover:text-slate-900">
+      <ClipboardCopy className="h-3.5 w-3.5" />
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
 function benchmarkSummary(run: TrainingCandidateBenchmarkRunRead): string {
   const prediction = run.prediction_json ?? {};
   const sessions = Array.isArray(prediction.sessions) ? prediction.sessions.length : 0;
@@ -239,16 +258,21 @@ function buildGroundTruthPayload(form: GroundTruthForm): Record<string, unknown>
 
 export default function TrainingDatasetReviewPage() {
   const params = useParams<{ candidateId: string }>();
+  const router = useRouter();
   const candidateId = params.candidateId;
   const [candidate, setCandidate] = useState<TrainingEventCandidateRead | null>(null);
   const [form, setForm] = useState<GroundTruthForm>(() => buildForm(null));
   const [groupJson, setGroupJson] = useState("[]");
   const [sessionJson, setSessionJson] = useState("[]");
+  const [pendingQueue, setPendingQueue] = useState<TrainingEventCandidateRead[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [jsonError, setJsonError] = useState<string | null>(null);
+  const [reviewNote, setReviewNote] = useState("");
+  const [reviewStartedAt, setReviewStartedAt] = useState(() => Date.now());
+  const [imageModalIndex, setImageModalIndex] = useState<number | null>(null);
   const [benchmarkRuns, setBenchmarkRuns] = useState<TrainingCandidateBenchmarkRunRead[]>([]);
   const [benchmarkJob, setBenchmarkJob] = useState<TrainingBenchmarkJobRead | null>(null);
   const [isBenchmarking, setIsBenchmarking] = useState(false);
@@ -258,6 +282,7 @@ export default function TrainingDatasetReviewPage() {
 
   useEffect(() => {
     void loadCandidate();
+    setReviewStartedAt(Date.now());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidateId]);
 
@@ -268,6 +293,7 @@ export default function TrainingDatasetReviewPage() {
     setSessionJson(prettyJson(nextForm.sessions));
     setJsonError(null);
     setSaveMessage(null);
+    setReviewNote("");
   }, [candidate]);
 
   const rawTexts = useMemo(() => {
@@ -289,10 +315,14 @@ export default function TrainingDatasetReviewPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const nextCandidate = await getTrainingDatasetCandidate(candidateId);
+      const [nextCandidate, runs, pending] = await Promise.all([
+        getTrainingDatasetCandidate(candidateId),
+        listTrainingDatasetBenchmarkRuns(candidateId),
+        listTrainingDatasetCandidates({ limit: 200, review_status: "pending" }),
+      ]);
       setCandidate(nextCandidate);
-      const runs = await listTrainingDatasetBenchmarkRuns(candidateId);
       setBenchmarkRuns(runs.items);
+      setPendingQueue(pending.items);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : "候補の取得に失敗しました。";
       setError(message);
@@ -400,7 +430,21 @@ export default function TrainingDatasetReviewPage() {
     }));
   }
 
-  async function handleSaveGroundTruth() {
+  function nextPendingCandidateId(): string | null {
+    const next = pendingQueue.find((item) => item.id !== candidateId);
+    return next?.id ?? null;
+  }
+
+  function goToNextPending() {
+    const nextId = nextPendingCandidateId();
+    if (nextId) {
+      router.push(`/admin/training-dataset/${nextId}`);
+    } else {
+      setSaveMessage("未レビューの次候補はありません。");
+    }
+  }
+
+  async function handleSaveGroundTruth(action: "stay" | "next" = "stay", status = "ground_truth_saved") {
     if (!candidate) return;
     setIsSaving(true);
     setSaveMessage(null);
@@ -409,15 +453,58 @@ export default function TrainingDatasetReviewPage() {
       const saved = await saveTrainingDatasetGroundTruth(candidate.id, {
         ground_truth_json: buildGroundTruthPayload(form),
         reviewer: "admin",
+        review_status: status,
+        review_seconds: Math.max(0, Math.round((Date.now() - reviewStartedAt) / 1000)),
+        note: reviewNote.trim() || null,
       });
       setCandidate(saved);
       setSaveMessage("Ground Truthを保存しました。Event Coreには登録していません。");
+      if (action === "next") {
+        const pending = await listTrainingDatasetCandidates({ limit: 200, review_status: "pending" });
+        const next = pending.items.find((item) => item.id !== candidate.id);
+        if (next) {
+          router.push(`/admin/training-dataset/${next.id}`);
+        } else {
+          setPendingQueue([]);
+          setSaveMessage("Ground Truthを保存しました。未レビューの次候補はありません。");
+        }
+      }
     } catch (err) {
       setJsonError(err instanceof Error ? err.message : "Ground Truth保存に失敗しました。");
     } finally {
       setIsSaving(false);
     }
   }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName;
+      const isEditing =
+        tagName === "INPUT" ||
+        tagName === "TEXTAREA" ||
+        tagName === "SELECT" ||
+        Boolean(target?.isContentEditable);
+      if (isEditing) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void handleSaveGroundTruth("stay");
+        return;
+      }
+      if (!event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        goToNextPending();
+        return;
+      }
+      if (!event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        void handleSaveGroundTruth("next");
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidate, form, pendingQueue, reviewNote, reviewStartedAt]);
 
   function toggleBenchmarkRoute(route: string) {
     setBenchmarkRoutes((current) =>
@@ -533,8 +620,39 @@ export default function TrainingDatasetReviewPage() {
         </div>
       </Card>
 
+      <Card className="sticky top-3 z-20 border-sky-200 bg-white/95 p-4 shadow-sm backdrop-blur">
+        <div className="grid gap-3 xl:grid-cols-[1fr_auto] xl:items-end">
+          <label className="block">
+            <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">review note</span>
+            <input
+              value={reviewNote}
+              onChange={(event) => setReviewNote(event.target.value)}
+              placeholder="判断理由や未確定メモ。任意"
+              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" onClick={() => handleSaveGroundTruth("stay")} disabled={isSaving}>
+              {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+              保存
+            </Button>
+            <Button type="button" onClick={() => handleSaveGroundTruth("next")} disabled={isSaving} className="bg-sky-700 text-white">
+              保存して次へ
+            </Button>
+            <Button type="button" onClick={() => handleSaveGroundTruth("next")} disabled={isSaving} className="bg-emerald-700 text-white">
+              <CheckCircle2 className="mr-2 h-4 w-4" />
+              承認して次へ
+            </Button>
+            <Button type="button" variant="outline" onClick={goToNextPending}>
+              次候補
+            </Button>
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-slate-500">ショートカット: Ctrl/Cmd+S 保存 / N 次候補 / A 承認して次へ</p>
+      </Card>
+
       <div className="space-y-5">
-        <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+        <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.1fr)_minmax(0,1fr)]">
           <Card className="min-w-0 p-5">
             <h2 className="font-bold">Source Images</h2>
             <div className="mt-2 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
@@ -558,11 +676,16 @@ export default function TrainingDatasetReviewPage() {
                   const assetRecord = asset && typeof asset === "object" ? (asset as Record<string, unknown>) : {};
                   return assetId ? (
                     <div key={assetId} className="min-w-0">
-                      <img
-                        src={apiUrl(`/admin/source-assets/${assetId}/image`)}
-                        alt={`source ${index + 1}`}
-                        className="aspect-square rounded-xl border border-slate-200 object-cover"
-                      />
+                      <button type="button" onClick={() => setImageModalIndex(index)} className="group relative block w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                        <img
+                          src={apiUrl(`/admin/source-assets/${assetId}/image`)}
+                          alt={`source ${index + 1}`}
+                          className="aspect-square w-full object-cover transition group-hover:scale-[1.02]"
+                        />
+                        <span className="absolute right-2 top-2 rounded-full bg-slate-950/75 p-1.5 text-white opacity-90">
+                          <Maximize2 className="h-3.5 w-3.5" />
+                        </span>
+                      </button>
                       <p className="mt-1 truncate text-[11px] font-bold text-slate-700">
                         #{index + 1} predicted: {String(assetRecord.source_type ?? itemSourceTypes[index] ?? "-")}
                       </p>
@@ -579,7 +702,10 @@ export default function TrainingDatasetReviewPage() {
           </Card>
 
           <Card className="min-w-0 p-5">
-            <h2 className="font-bold">OCR Raw Text</h2>
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="font-bold">OCR Raw Text</h2>
+              <CopyButton text={rawTexts.map((item) => String((item as Record<string, unknown>).raw_text ?? "")).join("\n\n---\n\n")} />
+            </div>
             <div className="mt-3 max-h-[540px] overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed">
               {rawTexts.length ? (
                 rawTexts.map((item, index) => (
@@ -593,6 +719,35 @@ export default function TrainingDatasetReviewPage() {
               ) : (
                 <p>OCR Raw Textはありません。</p>
               )}
+            </div>
+          </Card>
+
+          <Card className="min-w-0 p-5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="font-bold">Prediction / Ground Truth</h2>
+              <CopyButton text={JSON.stringify({ prediction_json: candidate.prediction_json, ground_truth_json: buildGroundTruthPayload(form) }, null, 2)} />
+            </div>
+            <div className="mt-3 grid gap-3">
+              {["event_name", "event_date", "venue_name", "open_time", "start_time"].map((field) => {
+                const predictionValue = candidate.prediction_json[field];
+                const groundTruthValue = (buildGroundTruthPayload(form) as Record<string, unknown>)[field];
+                const changed = predictionValue !== groundTruthValue;
+                return (
+                  <div key={field} className={`rounded-xl border p-3 text-sm ${changed ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-slate-50"}`}>
+                    <p className="font-mono text-xs font-bold text-slate-500">{field}</p>
+                    <div className="mt-2 grid gap-2 md:grid-cols-2">
+                      <p className="break-words rounded-lg bg-white px-3 py-2 text-slate-600">P: {String(predictionValue ?? "-")}</p>
+                      <p className="break-words rounded-lg bg-white px-3 py-2 font-semibold text-slate-900">GT: {String(groundTruthValue ?? "-")}</p>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                <p className="rounded-lg bg-slate-50 p-3">Prediction groups: {Array.isArray(candidate.prediction_json.group_candidates) ? candidate.prediction_json.group_candidates.length : 0}</p>
+                <p className="rounded-lg bg-slate-50 p-3">GT groups: {form.group_candidates.length}</p>
+                <p className="rounded-lg bg-slate-50 p-3">Prediction sessions: {Array.isArray(candidate.prediction_json.sessions) ? candidate.prediction_json.sessions.length : 0}</p>
+                <p className="rounded-lg bg-slate-50 p-3">GT sessions: {form.sessions.length}</p>
+              </div>
             </div>
           </Card>
         </div>
@@ -630,7 +785,7 @@ export default function TrainingDatasetReviewPage() {
                   画像ごとの分類器教師データです。Session全体の処理戦略とは分けて保存します。
                 </p>
               </div>
-              <Button onClick={handleSaveGroundTruth} disabled={isSaving}>
+              <Button onClick={() => handleSaveGroundTruth("stay")} disabled={isSaving}>
                 {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                 Save Ground Truth
               </Button>
@@ -803,6 +958,7 @@ export default function TrainingDatasetReviewPage() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="font-bold">JSON編集</h3>
                 <div className="flex flex-wrap gap-2">
+                  <CopyButton text={groupJson} />
                   <Button type="button" variant="outline" size="sm" onClick={syncGroupFormToJson}>
                     フォームをJSONへ
                   </Button>
@@ -946,6 +1102,7 @@ export default function TrainingDatasetReviewPage() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="font-bold">JSON編集</h3>
                 <div className="flex flex-wrap gap-2">
+                  <CopyButton text={sessionJson} />
                   <Button type="button" variant="outline" size="sm" onClick={syncSessionFormToJson}>
                     フォームをJSONへ
                   </Button>
@@ -1065,18 +1222,122 @@ export default function TrainingDatasetReviewPage() {
 
       <div className="grid min-w-0 gap-4 lg:grid-cols-2">
         <Card className="min-w-0 p-5">
-          <h3 className="mb-3 font-bold">prediction_json</h3>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="font-bold">prediction_json</h3>
+            <CopyButton text={prettyJson(candidate.prediction_json)} />
+          </div>
           <JsonBlock value={candidate.prediction_json} />
         </Card>
         <Card className="min-w-0 p-5">
-          <h3 className="mb-3 font-bold">ground_truth_json</h3>
-          <JsonBlock value={candidate.ground_truth_json} />
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="font-bold">ground_truth_json</h3>
+            <CopyButton text={prettyJson(buildGroundTruthPayload(form))} />
+          </div>
+          <JsonBlock value={buildGroundTruthPayload(form)} />
         </Card>
         <Card className="min-w-0 p-5 lg:col-span-2">
-          <h3 className="mb-3 font-bold">input_payload_json</h3>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="font-bold">review_revisions</h3>
+            <CopyButton text={prettyJson(candidate.review_revisions ?? [])} />
+          </div>
+          <div className="space-y-3">
+            {(candidate.review_revisions ?? []).length ? (
+              (candidate.review_revisions ?? []).map((revision) => (
+                <details key={revision.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <summary className="cursor-pointer list-none">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="font-bold">Review #{revision.revision}</p>
+                      <div className="flex flex-wrap gap-2 text-xs text-slate-600">
+                        <span className="rounded-full bg-slate-100 px-3 py-1">{revision.review_status}</span>
+                        <span className="rounded-full bg-slate-100 px-3 py-1">{revision.reviewer ?? "unknown"}</span>
+                        <span className="rounded-full bg-slate-100 px-3 py-1">{revision.review_seconds ?? "-"} sec</span>
+                        <span className="font-mono">{revision.created_at}</span>
+                      </div>
+                    </div>
+                  </summary>
+                  <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">change_set_json</p>
+                        <CopyButton text={prettyJson(revision.change_set_json)} />
+                      </div>
+                      <JsonBlock value={revision.change_set_json} />
+                    </div>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">model_eval_metadata_json</p>
+                        <CopyButton text={prettyJson(revision.model_eval_metadata_json)} />
+                      </div>
+                      <JsonBlock value={revision.model_eval_metadata_json} />
+                    </div>
+                  </div>
+                </details>
+              ))
+            ) : (
+              <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">まだReview Revisionはありません。</p>
+            )}
+          </div>
+        </Card>
+        <Card className="min-w-0 p-5 lg:col-span-2">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="font-bold">input_payload_json</h3>
+            <CopyButton text={prettyJson(candidate.input_payload_json)} />
+          </div>
           <JsonBlock value={candidate.input_payload_json} />
         </Card>
       </div>
+
+      {imageModalIndex !== null ? (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 p-3 text-white">
+          <div className="mx-auto flex h-full max-w-7xl flex-col gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-mono text-sm">
+                image {imageModalIndex + 1} / {imageAssets.length}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setImageModalIndex((current) => (current === null ? null : Math.max(0, current - 1)))}
+                  disabled={imageModalIndex <= 0}
+                  className="bg-white text-slate-900"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  前へ
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setImageModalIndex((current) => (current === null ? null : Math.min(imageAssets.length - 1, current + 1)))}
+                  disabled={imageModalIndex >= imageAssets.length - 1}
+                  className="bg-white text-slate-900"
+                >
+                  次へ
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+                <button type="button" onClick={() => setImageModalIndex(null)} className="grid h-10 w-10 place-items-center rounded-lg bg-white text-slate-900">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto rounded-2xl bg-slate-900 p-3">
+              {(() => {
+                const asset = imageAssets[imageModalIndex];
+                const assetId = getSourceAssetId(asset);
+                return assetId ? (
+                  <img
+                    src={apiUrl(`/admin/source-assets/${assetId}/image`)}
+                    alt={`source ${imageModalIndex + 1}`}
+                    className="mx-auto max-h-none max-w-full object-contain"
+                  />
+                ) : (
+                  <div className="grid h-full place-items-center text-sm text-slate-300">画像参照はありません。</div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

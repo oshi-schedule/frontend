@@ -331,8 +331,25 @@ export interface TrainingEventCandidateRead {
   review_status: string;
   reviewer: string | null;
   reviewed_at: string | null;
+  review_revisions?: TrainingEventCandidateReviewRevisionRead[];
   created_at: string;
   updated_at: string;
+}
+
+export interface TrainingEventCandidateReviewRevisionRead {
+  id: string;
+  training_candidate_id: string;
+  revision: number;
+  review_status: string;
+  reviewer: string | null;
+  ground_truth_before_json: Record<string, unknown> | null;
+  ground_truth_after_json: Record<string, unknown>;
+  change_set_json: Array<Record<string, unknown>>;
+  model_eval_metadata_json: Record<string, unknown> | null;
+  review_metadata_json: Record<string, unknown> | null;
+  review_seconds: number | null;
+  note: string | null;
+  created_at: string;
 }
 
 export interface TrainingDatasetJobRead {
@@ -431,6 +448,11 @@ export interface TrainingDatasetStats {
   source_type_counts: Record<string, number>;
   processing_route_counts: Record<string, number>;
   mode_counts: Record<string, number>;
+  contributor_counts: Record<string, number>;
+  reviewer_counts: Record<string, number>;
+  route_quality_stats: Record<string, unknown>;
+  model_quality_stats: Record<string, unknown>;
+  review_time_stats: Record<string, unknown>;
 }
 
 export interface OCRTimetableReviewRevision {
@@ -942,7 +964,13 @@ export function getTrainingDatasetCandidate(candidateId: string) {
 
 export function saveTrainingDatasetGroundTruth(
   candidateId: string,
-  payload: { ground_truth_json: Record<string, unknown>; reviewer?: string | null },
+  payload: {
+    ground_truth_json: Record<string, unknown>;
+    reviewer?: string | null;
+    review_status?: string;
+    review_seconds?: number | null;
+    note?: string | null;
+  },
 ) {
   return apiFetch<TrainingEventCandidateRead>(`/admin/training-dataset/${candidateId}/ground-truth`, {
     method: "POST",
