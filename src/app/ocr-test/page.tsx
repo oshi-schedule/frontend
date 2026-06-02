@@ -1,9 +1,8 @@
 "use client";
 
-import { ImageIcon, Loader2, ScanText } from "lucide-react";
+import { Cpu, ImageIcon, Loader2, ScanText } from "lucide-react";
 import { useState } from "react";
-import { postOCRTest } from "@/api/ocr";
-import { ApiError } from "@/api/client";
+import { postOCRBackendTest, type OCRBackendSuccess } from "@/api/ocr-backend";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -17,6 +16,8 @@ const ACCEPT = ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp";
 export default function OCRTestPage() {
   const [file, setFile] = useState<File | null>(null);
   const [rawText, setRawText] = useState("");
+  const [result, setResult] = useState<OCRBackendSuccess | null>(null);
+  const [upstream, setUpstream] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -26,16 +27,17 @@ export default function OCRTestPage() {
     setIsSubmitting(true);
     setError(null);
     try {
-      const result = await postOCRTest(file);
-      setRawText(result.raw_text);
+      const response = await postOCRBackendTest(file);
+      setUpstream(response.upstream);
+      if (response.payload.status === "error") {
+        throw new Error(response.payload.message);
+      }
+      setResult(response.payload);
+      setRawText(response.payload.data.ocr_text);
     } catch (err) {
       setRawText("");
-      if (err instanceof ApiError) {
-        const detail = typeof err.detail === "string" ? err.detail : null;
-        setError(detail ?? err.message);
-      } else {
-        setError(err instanceof Error ? err.message : "OCRの実行に失敗しました");
-      }
+      setResult(null);
+      setError(err instanceof Error ? err.message : "OCRの実行に失敗しました");
     } finally {
       setIsSubmitting(false);
     }
@@ -44,8 +46,8 @@ export default function OCRTestPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="OCR Test"
-        subtitle="イベントビラやタイムテーブル画像をアップロードして、生のOCR結果をそのまま確認します。"
+        title="OCR Backend Test"
+        subtitle="OCR専用VMへ画像をアップロードして、NDLOCR Liteの生結果と処理メトリクスを確認します。"
         backHref="/"
       />
 
@@ -85,7 +87,7 @@ export default function OCRTestPage() {
 
         <Button onClick={handleSubmit} disabled={!file || isSubmitting} className="w-full sm:w-auto">
           {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <ScanText size={16} />}
-          {isSubmitting ? "OCR実行中..." : "OCRを実行"}
+          {isSubmitting ? "OCR実行中..." : "OCR専用VMで実行"}
         </Button>
 
         {error ? (
@@ -96,10 +98,59 @@ export default function OCRTestPage() {
       </Card>
 
       <Card className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Cpu size={18} className="text-[var(--muted)]" />
+          <h2 className="text-base font-semibold">OCR Backend Metrics</h2>
+        </div>
+        {result ? (
+          <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <dt className="text-[var(--muted)]">Upstream</dt>
+              <dd className="break-all font-semibold text-[var(--foreground)]">{upstream}</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">Request ID</dt>
+              <dd className="break-all font-semibold text-[var(--foreground)]">{result.request_id}</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">Engine</dt>
+              <dd className="font-semibold text-[var(--foreground)]">
+                {result.data.engine}@{result.data.engine_version}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">Elapsed</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{result.data.elapsed_seconds.toFixed(2)} sec</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">Queue Wait</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{(result.data.queue_wait_seconds ?? 0).toFixed(3)} sec</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">Active OCR</dt>
+              <dd className="font-semibold text-[var(--foreground)]">
+                {result.data.active_ocr_count ?? "-"} / {result.data.max_concurrent_ocr ?? "-"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">CPU</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{result.data.cpu_percent?.toFixed(1) ?? "-"}%</dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">Memory</dt>
+              <dd className="font-semibold text-[var(--foreground)]">{result.data.memory_percent?.toFixed(1) ?? "-"}%</dd>
+            </div>
+          </dl>
+        ) : (
+          <p className="text-sm text-[var(--muted)]">OCR実行後に専用VMのメトリクスが表示されます。</p>
+        )}
+      </Card>
+
+      <Card className="space-y-4">
         <div>
           <h2 className="text-base font-semibold">OCR Raw Text</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            後段の整形はせず、PaddleOCR から取り出したテキストを改行結合して表示します。
+            後段の整形はせず、OCR専用VMのNDLOCR Liteから取り出したテキストを表示します。
           </p>
         </div>
 

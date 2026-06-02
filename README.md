@@ -13,7 +13,10 @@ npm run dev
 
 ```env
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+OCR_API_BASE_URL=http://34.146.158.181:8000
 ```
+
+`OCR_API_BASE_URL` は `/ocr-test` のOCR専用VMプロキシで使います。ブラウザから直接OCR VMを叩くのではなく、Next.js API routeからサーバーサイドで転送するため、CORSの影響を受けにくい構成です。
 
 ## Type generation
 
