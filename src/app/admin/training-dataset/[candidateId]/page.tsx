@@ -95,6 +95,12 @@ function getAssetFilename(asset: unknown, index: number): string {
   return getStringField(asset, "filename") || `source_image_${index + 1}.jpg`;
 }
 
+function sourceTypeHintInitialCorrect(candidate: TrainingEventCandidateRead | null): string {
+  const hint = String(candidate?.source_type_hint ?? candidate?.input_payload_json?.source_type_hint ?? "").trim();
+  if (!hint || hint === "auto" || hint === "training_dataset") return "";
+  return SOURCE_TYPE_OPTIONS.includes(hint) ? hint : "";
+}
+
 function normalizeGroupCandidates(value: unknown): GroupCandidateDraft[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => {
@@ -146,6 +152,7 @@ function buildItemSourceTypeDrafts(candidate: TrainingEventCandidateRead | null)
   const itemSourceTypes = Array.isArray(candidate?.input_payload_json?.item_source_types)
     ? candidate.input_payload_json.item_source_types.map((item) => String(item ?? ""))
     : [];
+  const initialCorrectSourceType = sourceTypeHintInitialCorrect(candidate);
   const existing = Array.isArray(candidate?.ground_truth_json?.correct_item_source_types)
     ? candidate.ground_truth_json.correct_item_source_types
     : [];
@@ -165,7 +172,7 @@ function buildItemSourceTypeDrafts(candidate: TrainingEventCandidateRead | null)
       source_asset_id: sourceAssetId,
       filename: getStringField(asset, "filename") || `image_${index + 1}`,
       predicted_source_type: predicted,
-      correct_source_type: existingByAssetId.get(sourceAssetId) || predicted,
+      correct_source_type: existingByAssetId.get(sourceAssetId) || initialCorrectSourceType || predicted,
     };
   });
 }
@@ -863,7 +870,7 @@ export default function TrainingDatasetReviewPage() {
             <div className="rounded-2xl border border-slate-200 p-4">
               <h3 className="font-bold">Image Source Type Labels</h3>
               <p className="mt-1 text-sm text-slate-500">
-                multi画像では、画像ごとの分類器教師データとして predicted / correct を保存します。
+                multi画像では、画像ごとの分類器教師データとして predicted / correct を保存します。correctの初期値には協力者のsource type hintを使います。
               </p>
               <div className="mt-3 space-y-3">
                 {form.correct_item_source_types.map((item, index) => (
