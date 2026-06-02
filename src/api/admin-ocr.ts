@@ -344,6 +344,46 @@ export interface TrainingDatasetJobRead {
   candidate: TrainingEventCandidateRead | null;
 }
 
+export interface TrainingCandidateBenchmarkRunRead {
+  id: string;
+  training_candidate_id: string;
+  route_name: string;
+  route_version: string;
+  model_name: string;
+  input_payload_json: Record<string, unknown>;
+  prediction_json: Record<string, unknown>;
+  ground_truth_json: Record<string, unknown> | null;
+  metrics_json: Record<string, unknown> | null;
+  latency_ms: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost_usd: number | null;
+  status: string;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface TrainingBenchmarkJobRead {
+  job_id: string;
+  candidate_id: string;
+  status: TrainingDatasetJobStatus | string;
+  progress: number;
+  message: string;
+  current_step: string | null;
+  routes: string[];
+  models: string[];
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  runs: TrainingCandidateBenchmarkRunRead[];
+}
+
+export interface TrainingCandidateBenchmarkRunListResponse {
+  items: TrainingCandidateBenchmarkRunRead[];
+}
+
 export interface TrainingDatasetCandidateListResponse {
   items: TrainingEventCandidateRead[];
 }
@@ -879,4 +919,22 @@ export function saveTrainingDatasetGroundTruth(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function createTrainingDatasetBenchmarkJob(
+  candidateId: string,
+  payload: { routes: string[]; models: string[] },
+) {
+  return apiFetch<TrainingBenchmarkJobRead>(`/admin/training-dataset/${candidateId}/benchmark-runs`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getTrainingDatasetBenchmarkJob(jobId: string) {
+  return apiFetch<TrainingBenchmarkJobRead>(`/admin/training-dataset/benchmark-jobs/${jobId}`);
+}
+
+export function listTrainingDatasetBenchmarkRuns(candidateId: string) {
+  return apiFetch<TrainingCandidateBenchmarkRunListResponse>(`/admin/training-dataset/${candidateId}/benchmark-runs`);
 }

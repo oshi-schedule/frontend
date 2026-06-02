@@ -172,6 +172,7 @@ export default function TrainingDatasetPage() {
           <label className="block max-w-md">
             <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">source_type hint</span>
             <select
+              suppressHydrationWarning
               value={sourceType}
               onChange={(event) => setSourceType(event.target.value)}
               className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"

@@ -15,7 +15,11 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 function JsonView({ value }: { value: unknown }) {
-  return <pre className="max-h-[520px] overflow-auto rounded-md bg-[#f8fafc] p-3 text-xs leading-6 text-slate-700">{JSON.stringify(value, null, 2)}</pre>;
+  return (
+    <pre className="max-h-[520px] overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-md bg-[#f8fafc] p-3 text-xs leading-6 text-slate-700">
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  );
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -264,75 +268,73 @@ export default function EventCandidateReviewsPage() {
 
         {error ? <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
 
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-3 py-2">詳細</th>
-                <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Candidate</th>
-                <th className="px-3 py-2">Date / Venue</th>
-                <th className="px-3 py-2">Mode</th>
-                <th className="px-3 py-2">Created At</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 bg-white">
-              {candidates.map((candidate) => {
-                const expanded = expandedIds.has(candidate.id);
-                return (
-                  <tr key={candidate.id} className="align-top">
-                    <td className="px-3 py-2">
-                      <button type="button" onClick={() => toggle(candidate.id)} className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900">
-                        {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                      </button>
-                    </td>
-                    <td className="px-3 py-2">
+        <div className="space-y-3">
+          {candidates.map((candidate) => {
+            const expanded = expandedIds.has(candidate.id);
+            return (
+              <div key={candidate.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Badge className={statusClass(candidate.review_status)}>{candidate.review_status}</Badge>
-                    </td>
-                    <td className="max-w-[300px] truncate px-3 py-2 font-semibold text-slate-900">
-                      <Link href={`/admin/training-dataset/${candidate.id}`} className="underline decoration-slate-300 underline-offset-2 hover:decoration-slate-900">
-                        {candidateTitle(candidate)}
-                      </Link>
-                    </td>
-                    <td className="max-w-[320px] truncate px-3 py-2 text-xs text-slate-600">{candidateSubline(candidate)}</td>
-                    <td className="px-3 py-2 text-xs text-slate-600">
-                      {candidate.single_multi} / {candidate.source_type ?? "-"}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-500">{candidate.created_at}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-600">
+                        {candidate.single_multi} / {candidate.source_type ?? "-"}
+                      </span>
+                    </div>
+                    <Link
+                      href={`/admin/training-dataset/${candidate.id}`}
+                      className="mt-2 block break-words text-base font-bold text-slate-900 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-900"
+                    >
+                      {candidateTitle(candidate)}
+                    </Link>
+                    <p className="mt-1 break-words text-sm text-slate-600">{candidateSubline(candidate)}</p>
+                    <p className="mt-1 break-all font-mono text-[11px] text-slate-400">{candidate.id}</p>
+                    <p className="mt-1 font-mono text-[11px] text-slate-400">{candidate.created_at}</p>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <Link href={`/admin/training-dataset/${candidate.id}`}>
+                      <Button type="button" variant="outline" size="sm">
+                        編集
+                      </Button>
+                    </Link>
+                    <button type="button" onClick={() => toggle(candidate.id)} className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 hover:text-slate-900">
+                      {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                    </button>
+                  </div>
+                </div>
 
-        {candidates.map((candidate) =>
-          expandedIds.has(candidate.id) ? (
-            <div key={`${candidate.id}-detail`} className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-3">
-              <div>
-                <div className="mb-1 flex items-center justify-between">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">prediction_json</p>
-                  <CopyButton text={JSON.stringify(candidate.prediction_json, null, 2)} />
-                </div>
-                <JsonView value={candidate.prediction_json} />
+                {expanded ? (
+                  <div className="mt-4 grid min-w-0 gap-3 lg:grid-cols-3">
+                    <div className="min-w-0">
+                      <div className="mb-1 flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">prediction_json</p>
+                        <CopyButton text={JSON.stringify(candidate.prediction_json, null, 2)} />
+                      </div>
+                      <JsonView value={candidate.prediction_json} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="mb-1 flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">ground_truth_json</p>
+                        <CopyButton text={JSON.stringify(candidate.ground_truth_json, null, 2)} />
+                      </div>
+                      <JsonView value={candidate.ground_truth_json} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="mb-1 flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">input_payload_json</p>
+                        <CopyButton text={JSON.stringify(candidate.input_payload_json, null, 2)} />
+                      </div>
+                      <JsonView value={candidate.input_payload_json} />
+                    </div>
+                  </div>
+                ) : null}
               </div>
-              <div>
-                <div className="mb-1 flex items-center justify-between">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">ground_truth_json</p>
-                  <CopyButton text={JSON.stringify(candidate.ground_truth_json, null, 2)} />
-                </div>
-                <JsonView value={candidate.ground_truth_json} />
-              </div>
-              <div>
-                <div className="mb-1 flex items-center justify-between">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">input_payload_json</p>
-                  <CopyButton text={JSON.stringify(candidate.input_payload_json, null, 2)} />
-                </div>
-                <JsonView value={candidate.input_payload_json} />
-              </div>
-            </div>
-          ) : null
-        )}
+            );
+          })}
+          {candidates.length === 0 ? (
+            <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">Training Candidateはまだありません。</p>
+          ) : null}
+        </div>
       </Card>
     </div>
   );
