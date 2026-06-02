@@ -348,6 +348,25 @@ export interface TrainingDatasetCandidateListResponse {
   items: TrainingEventCandidateRead[];
 }
 
+export interface TrainingDatasetStats {
+  total: number;
+  pending: number;
+  ground_truth_saved: number;
+  rejected: number;
+  ready_for_training: number;
+  field_correction_stats: Record<string, {
+    reviewed_count: number;
+    edited_count: number;
+    edit_rate: number;
+  }>;
+  session_linked_reviews: number;
+  unlinked_reviews: number;
+  single_image_sessions: number;
+  multi_image_sessions: number;
+  source_type_counts: Record<string, number>;
+  mode_counts: Record<string, number>;
+}
+
 export interface OCRTimetableReviewRevision {
   id: string;
   session_id: string;
@@ -842,6 +861,14 @@ export function listTrainingDatasetCandidates(options: { limit?: number; review_
       review_status: options.review_status,
     },
   });
+}
+
+export function getTrainingDatasetStats() {
+  return apiFetch<TrainingDatasetStats>("/admin/training-dataset/stats");
+}
+
+export function getTrainingDatasetCandidate(candidateId: string) {
+  return apiFetch<TrainingEventCandidateRead>(`/admin/training-dataset/${candidateId}`);
 }
 
 export function saveTrainingDatasetGroundTruth(

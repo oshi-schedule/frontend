@@ -33,9 +33,9 @@ const adminNavSections = [
   {
     label: "Labeling",
     items: [
-      { href: "/admin/training-dataset", label: "Event Labeling", icon: DatabaseZap, exact: true },
-      { href: "/admin/event-candidate-review", label: "Candidate Review", icon: ClipboardCheck, exact: true },
-      { href: "/admin/event-candidate-reviews", label: "Dataset Analytics", icon: BarChart3, exact: true },
+      { href: "/admin/training-dataset", label: "Labeling Upload", icon: DatabaseZap },
+      { href: "/admin/event-candidate-reviews", label: "Labeling Analytics", icon: BarChart3, exact: true },
+      { href: "/admin/event-candidate-review", label: "Draft Review", icon: ClipboardCheck, exact: true },
       { href: "/admin/ocr-test", label: "OCR Draft Upload", icon: ScanSearch, exact: true },
     ],
   },

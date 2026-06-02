@@ -35,9 +35,9 @@ const quickMenuSections = [
     title: "Labeling",
     description: "SourceからEvent Candidate正解データを作る主導線です。",
     items: [
-      { href: "/admin/training-dataset", label: "Event Candidate Labeling", desc: "Source → EventCandidate → 正解JSONを蓄積。Event Core登録なし" },
-      { href: "/admin/event-candidate-review", label: "Candidate Review", desc: "OCR Draft由来のpending候補を確認・修正" },
-      { href: "/admin/event-candidate-reviews", label: "Dataset Analytics", desc: "レビュー件数と項目別修正率から弱点を確認" },
+      { href: "/admin/training-dataset", label: "Labeling Upload", desc: "Sourceをアップロードして EventCandidate を作成。レビュー編集は候補詳細へ分離" },
+      { href: "/admin/event-candidate-reviews", label: "Labeling Analytics", desc: "training_event_candidates の件数と項目別修正率を確認" },
+      { href: "/admin/event-candidate-review", label: "Draft Review", desc: "OCR Draft由来のpending候補をApprove/Edit/Rejectする運用レビュー" },
       { href: "/admin/ocr-test", label: "OCR Draft Upload", desc: "Upload Session単位でOCR Draftを作成する補助導線" },
     ],
   },

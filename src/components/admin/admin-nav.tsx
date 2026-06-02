@@ -5,8 +5,8 @@ const links = [
   ["/admin/events", "Events"],
   ["/admin/groups", "Groups"],
   ["/admin/venues", "Venues"],
-  ["/admin/training-dataset", "Labeling"],
-  ["/admin/event-candidate-reviews", "Analytics"],
+  ["/admin/training-dataset", "Upload"],
+  ["/admin/event-candidate-reviews", "Labeling Analytics"],
   ["/admin/ocr-evaluation", "OCR Lab"],
 ];
 
