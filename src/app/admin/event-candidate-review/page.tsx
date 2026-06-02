@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ClipboardCopy, Edit3, ImageIcon, XCircle } from "lucide-react";
+import { CheckCircle2, ClipboardCopy, Edit3, ImageIcon, Plus, Trash2, XCircle } from "lucide-react";
 import {
   createEventCandidateReview,
   type EventCandidateReviewRead,
@@ -37,6 +37,8 @@ interface EventCandidateReviewBundleItem {
   upload_session_id?: string | null;
   source_images: EventCandidateReviewSourceImage[];
   event_aggregate_candidate: OCREvaluationEventAggregateCandidate;
+  ocr_output?: CandidateReviewEditedValues;
+  review_prefill?: CandidateReviewEditedValues;
 }
 
 interface EventCandidateReviewBundle {
@@ -49,6 +51,8 @@ interface CandidateReviewEditedValues {
   event_name?: string | null;
   event_date?: string | null;
   venue_name?: string | null;
+  open_time?: string | null;
+  start_time?: string | null;
   group_candidates?: string[];
 }
 
@@ -113,24 +117,27 @@ function candidateToOcrOutput(candidate: OCREvaluationEventAggregateCandidate): 
     event_name: candidate.event_name,
     event_date: candidate.event_date,
     venue_name: candidate.venue_name,
+    open_time: candidate.open_time,
+    start_time: candidate.start_time,
     group_candidates: candidate.group_candidates.map((group) => group.group_name),
   };
 }
 
-function parseGroups(text: string): string[] {
-  return text
-    .split("\n")
+function parseGroups(names: string[]): string[] {
+  return names
     .map((name) => name.trim())
     .filter(Boolean)
     .filter((name, index, names) => names.indexOf(name) === index);
 }
 
-function formValues(eventName: string, eventDate: string, venueName: string, groupsText: string): CandidateReviewEditedValues {
+function formValues(eventName: string, eventDate: string, venueName: string, openTime: string, startTime: string, groupNames: string[]): CandidateReviewEditedValues {
   return {
     event_name: eventName.trim() || null,
     event_date: eventDate.trim() || null,
     venue_name: venueName.trim() || null,
-    group_candidates: parseGroups(groupsText),
+    open_time: openTime.trim() || null,
+    start_time: startTime.trim() || null,
+    group_candidates: parseGroups(groupNames),
   };
 }
 
@@ -155,7 +162,9 @@ export default function EventCandidateReviewPage() {
   const [eventName, setEventName] = useState("");
   const [eventDate, setEventDate] = useState("");
   const [venueName, setVenueName] = useState("");
-  const [groupsText, setGroupsText] = useState("");
+  const [openTime, setOpenTime] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [groupNames, setGroupNames] = useState<string[]>([]);
   const [reviewerNote, setReviewerNote] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSavingReview, setIsSavingReview] = useState(false);
@@ -177,11 +186,13 @@ export default function EventCandidateReviewPage() {
     if (!selectedItem) return;
     const candidate = selectedItem.event_aggregate_candidate;
     const reviewGroundTruth = selectedReview?.ground_truth as CandidateReviewEditedValues | undefined;
-    const values = reviewGroundTruth?.event_name !== undefined ? reviewGroundTruth : candidateToOcrOutput(candidate);
+    const values = reviewGroundTruth?.event_name !== undefined ? reviewGroundTruth : selectedItem.review_prefill ?? candidateToOcrOutput(candidate);
     setEventName(values.event_name ?? "");
     setEventDate(values.event_date ?? "");
     setVenueName(values.venue_name ?? "");
-    setGroupsText((values.group_candidates ?? []).join("\n"));
+    setOpenTime(values.open_time ?? "");
+    setStartTime(values.start_time ?? "");
+    setGroupNames(values.group_candidates ?? []);
     setReviewerNote(selectedReview?.reviewer_note ?? "");
   }, [selectedItem, selectedReview]);
 
@@ -202,7 +213,7 @@ export default function EventCandidateReviewPage() {
       throw new Error("候補が選択されていません");
     }
     const originalValues = candidateToOcrOutput(selectedItem.event_aggregate_candidate);
-    const editedValues = formValues(eventName, eventDate, venueName, groupsText);
+    const editedValues = formValues(eventName, eventDate, venueName, openTime, startTime, groupNames);
     return {
       review_status: status,
       approved: status === "approved",
@@ -221,7 +232,7 @@ export default function EventCandidateReviewPage() {
     setIsSavingReview(true);
     const localReview = makeReviewResult(status);
     const originalJson = candidateToOcrOutput(selectedItem.event_aggregate_candidate);
-    const editedJson = formValues(eventName, eventDate, venueName, groupsText);
+    const editedJson = formValues(eventName, eventDate, venueName, openTime, startTime, groupNames);
     let persistedReview: EventCandidateReviewRead | null = null;
     try {
       persistedReview = await createEventCandidateReview({
@@ -264,6 +275,18 @@ export default function EventCandidateReviewPage() {
     setIsSavingReview(false);
   }
 
+  function updateGroupName(index: number, groupName: string) {
+    setGroupNames((current) => current.map((value, currentIndex) => (currentIndex === index ? groupName : value)));
+  }
+
+  function addGroupName() {
+    setGroupNames((current) => [...current, ""]);
+  }
+
+  function removeGroupName(index: number) {
+    setGroupNames((current) => current.filter((_, currentIndex) => currentIndex !== index));
+  }
+
   if (!bundle) {
     return (
       <div className="space-y-6">
@@ -281,7 +304,7 @@ export default function EventCandidateReviewPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Event Candidate Review" subtitle="候補生成 → 人間レビューまでを確認します。Event Core登録はまだ行いません。" backHref="/admin" />
+      <PageHeader title="Event Candidate Review" subtitle="OCR Ground Truthで整えた候補を、ここでApprove/Edit/Rejectして教師データとしてDB保存します。Event Core登録はまだ行いません。" backHref="/admin" />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Card className="p-4">
@@ -411,15 +434,58 @@ export default function EventCandidateReviewPage() {
                     <label className="space-y-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">event_date</span>
                       <Input type="date" value={eventDate} onChange={(event) => setEventDate(event.currentTarget.value)} />
+                      <span className="text-[11px] text-slate-400">カレンダーから選択できます。</span>
                     </label>
                     <label className="space-y-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">venue_name</span>
                       <Input value={venueName} onChange={(event) => setVenueName(event.currentTarget.value)} placeholder="会場名" />
                     </label>
-                    <label className="space-y-1">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">group_candidates</span>
-                      <Textarea value={groupsText} onChange={(event) => setGroupsText(event.currentTarget.value)} placeholder="1行に1グループ名" className="min-h-36 font-mono text-xs" />
-                    </label>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="space-y-1">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">open_time</span>
+                        <Input type="time" value={openTime} onChange={(event) => setOpenTime(event.currentTarget.value)} />
+                        <span className="text-[11px] text-slate-400">時刻ピッカーで入力できます。</span>
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">start_time</span>
+                        <Input type="time" value={startTime} onChange={(event) => setStartTime(event.currentTarget.value)} />
+                        <span className="text-[11px] text-slate-400">時刻ピッカーで入力できます。</span>
+                      </label>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">group_candidates</span>
+                        <Button type="button" onClick={addGroupName} className="h-8 bg-white px-3 text-xs text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50">
+                          <Plus className="h-3.5 w-3.5" />
+                          グループ追加
+                        </Button>
+                      </div>
+                      <div className="space-y-2">
+                        {groupNames.length ? (
+                          groupNames.map((groupName, index) => (
+                            <div key={`review-group-${index}`} className="flex gap-2">
+                              <Input
+                                value={groupName}
+                                onChange={(event) => updateGroupName(index, event.currentTarget.value)}
+                                placeholder={`グループ名 ${index + 1}`}
+                              />
+                              <Button
+                                type="button"
+                                className="h-10 w-10 shrink-0 bg-white p-0 text-red-600 ring-1 ring-slate-200 hover:bg-red-50 hover:text-red-700"
+                                onClick={() => removeGroupName(index)}
+                                aria-label={`グループ候補 ${index + 1} を削除`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-500">
+                            グループ候補は未入力です。「グループ追加」から追加できます。
+                          </div>
+                        )}
+                      </div>
+                    </div>
                     <label className="space-y-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">reviewer_note</span>
                       <Textarea value={reviewerNote} onChange={(event) => setReviewerNote(event.currentTarget.value)} placeholder="判断理由や修正メモ" />

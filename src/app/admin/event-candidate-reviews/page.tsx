@@ -51,6 +51,20 @@ function candidateSubline(review: EventCandidateReviewRead) {
   return [asString(candidate.event_date), asString(candidate.venue_name)].filter(Boolean).join(" / ") || "-";
 }
 
+const FIELD_LABELS: Record<string, string> = {
+  event_name: "event_name",
+  event_date: "event_date",
+  venue_name: "venue_name",
+  open_time: "open_time",
+  start_time: "start_time",
+  group_candidates: "group_candidates",
+};
+
+function formatRate(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "0%";
+  return `${Math.round(value * 100)}%`;
+}
+
 export default function EventCandidateReviewsPage() {
   const [reviews, setReviews] = useState<EventCandidateReviewRead[]>([]);
   const [groundTruthStats, setGroundTruthStats] = useState<GroundTruthStats | null>(null);
@@ -100,7 +114,7 @@ export default function EventCandidateReviewsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Event Candidate Reviews" subtitle="OCRイベント候補のレビュー履歴です。Extractor改善の失敗事例分析に使います。" backHref="/admin" />
+      <PageHeader title="教師データ分析" subtitle="OCRイベント候補レビューの件数・修正率を見て、次に改善すべきExtractorを判断します。" backHref="/admin" />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Card className="p-4">
@@ -138,6 +152,45 @@ export default function EventCandidateReviewsPage() {
           <p className="mt-1 text-2xl font-bold text-slate-900">{groundTruthStats?.multi_image_sessions ?? 0}</p>
         </Card>
       </div>
+
+      <Card className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold">項目別修正率</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              approved / edited を母数にして、edited_values_json に含まれた項目を「修正あり」として集計します。
+            </p>
+          </div>
+          <CopyButton text={JSON.stringify(groundTruthStats?.field_correction_stats ?? {}, null, 2)} />
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {Object.entries(FIELD_LABELS).map(([field, label]) => {
+            const stat = groundTruthStats?.field_correction_stats?.[field];
+            const rate = stat?.edit_rate ?? 0;
+            const tone =
+              rate >= 0.5
+                ? "border-red-200 bg-red-50 text-red-800"
+                : rate >= 0.25
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-800";
+            return (
+              <div key={field} className={`rounded-xl border p-4 ${tone}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-mono text-sm font-semibold">{label}</p>
+                  <p className="text-2xl font-bold">{formatRate(rate)}</p>
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/70">
+                  <div className="h-full rounded-full bg-current" style={{ width: `${Math.min(100, Math.round(rate * 100))}%` }} />
+                </div>
+                <p className="mt-2 text-xs opacity-80">
+                  edited {stat?.edited_count ?? 0} / reviewed {stat?.reviewed_count ?? 0}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
 
       <Card className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">

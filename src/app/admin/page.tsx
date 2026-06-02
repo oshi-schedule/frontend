@@ -78,7 +78,7 @@ export default function AdminDashboardPage() {
           { href: "/admin/sources", label: "Source確認", desc: "OCR投入待ちのSourceを確認" },
           { href: "/admin/ocr-test", label: "OCR Ground Truth", desc: "Upload Session単位でOCR・レビュー・教師データ作成" },
           { href: "/admin/event-candidate-review", label: "Event Candidate Review", desc: "OCR由来のイベント候補を採用・修正・却下" },
-          { href: "/admin/event-candidate-reviews", label: "Review Logs", desc: "イベント候補レビュー履歴を分析用に確認" },
+          { href: "/admin/event-candidate-reviews", label: "教師データ分析", desc: "レビュー件数と項目別修正率からOCRの弱点を確認" },
           { href: "/admin/ocr-evaluation", label: "OCR Evaluation Lab", desc: "100枚までのSourceKind / LayoutGraph一括評価。教師データ入口ではありません" },
         ].map(({ href, label, desc }) => (
           <Link key={href} href={href}>

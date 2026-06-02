@@ -14,7 +14,7 @@ const adminNavItems = [
   { href: "/admin/sources", label: "Sources", icon: FileText },
   { href: "/admin/ocr-test", label: "Ground Truth", icon: ScanSearch },
   { href: "/admin/event-candidate-review", label: "Candidate Review", icon: ClipboardCheck, exact: true },
-  { href: "/admin/event-candidate-reviews", label: "Review Logs", icon: ClipboardCheck, exact: true },
+  { href: "/admin/event-candidate-reviews", label: "GT Analytics", icon: ClipboardCheck, exact: true },
 ];
 
 export function AdminShell({ children }: { children: React.ReactNode }) {

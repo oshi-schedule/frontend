@@ -521,6 +521,11 @@ export interface GroundTruthStats {
   edited: number;
   rejected: number;
   ready_for_training: number;
+  field_correction_stats: Record<string, {
+    reviewed_count: number;
+    edited_count: number;
+    edit_rate: number;
+  }>;
   session_linked_reviews: number;
   unlinked_reviews: number;
   single_image_sessions: number;
