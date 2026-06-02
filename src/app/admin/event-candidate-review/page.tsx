@@ -223,6 +223,12 @@ function normalizeEventAggregateCandidate(value: Record<string, unknown>): OCREv
     source_node_ids: Array.isArray(candidate.source_node_ids) ? candidate.source_node_ids : [],
     confidence: typeof candidate.confidence === "number" ? candidate.confidence : 0,
     reasons: Array.isArray(candidate.reasons) ? candidate.reasons : [],
+    source_asset_ids: Array.isArray(candidate.source_asset_ids) ? candidate.source_asset_ids : [],
+    parsing_result_ids: Array.isArray(candidate.parsing_result_ids) ? candidate.parsing_result_ids : [],
+    source_type: candidate.source_type ?? null,
+    candidate_generation_method: candidate.candidate_generation_method ?? null,
+    candidate_model: candidate.candidate_model ?? null,
+    candidate_version: candidate.candidate_version ?? null,
   };
 }
 

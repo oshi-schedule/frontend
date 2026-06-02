@@ -58,6 +58,7 @@ function JsonBlock({ value }: { value: unknown }) {
 function pickCanonicalCandidate(result: OCRTestWorkflowResponse | null) {
   const session = result?.result.session ?? result?.result.parsed.session ?? null;
   return (
+    result?.result.parsed.session_event_candidate ??
     session?.event_core_resolution?.canonical_event_candidate ??
     session?.canonical_event_candidate ??
     session?.decision ??
@@ -84,6 +85,12 @@ function buildEventAggregateCandidate(result: OCRTestWorkflowResponse | null): O
       source_node_ids: canonical.parsing_result_ids ?? [],
       confidence: canonical.confidence ?? 0,
       reasons: canonical.reasons ?? [],
+      source_asset_ids: canonical.source_asset_ids ?? [],
+      parsing_result_ids: canonical.parsing_result_ids ?? [],
+      source_type: canonical.source_type ?? null,
+      candidate_generation_method: canonical.candidate_generation_method ?? null,
+      candidate_model: canonical.candidate_model ?? null,
+      candidate_version: canonical.candidate_version ?? null,
     };
   }
 
@@ -324,6 +331,12 @@ export default function AdminOCRTestPage() {
       edited_json: null,
       review_json: {
         origin: "ocr_ground_truth",
+        candidate_generation_method: candidate.candidate_generation_method ?? parsed.result.parsed.candidate_generation_method ?? null,
+        candidate_model: candidate.candidate_model ?? parsed.result.parsed.candidate_model ?? null,
+        candidate_version: candidate.candidate_version ?? parsed.result.parsed.candidate_version ?? null,
+        candidate_generation_error: parsed.result.parsed.candidate_generation_error ?? null,
+        fallback_aggregation_candidate: parsed.result.parsed.fallback_aggregation_candidate ?? null,
+        ocr_raw_texts: parsed.result.parsed.ocr_raw_texts ?? [],
         review_prefill: reviewPrefill,
         source_filename: files.map((file) => file.name).join(", ") || parsed.source.id,
         source_images: reviewSourceImages,

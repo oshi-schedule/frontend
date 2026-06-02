@@ -51,6 +51,19 @@ export interface OCRTestReparseResult {
     ground_truth: OCRTestGroundTruth | null;
     canonical_document?: unknown;
     event_candidates?: OCRImageEventCandidate[];
+    session_event_candidate?: OCREvaluationEventAggregateCandidate | null;
+    fallback_aggregation_candidate?: OCREvaluationEventAggregateCandidate | null;
+    candidate_generation_method?: string | null;
+    candidate_model?: string | null;
+    candidate_version?: string | null;
+    candidate_generation_error?: string | null;
+    ocr_raw_texts?: Array<{
+      source_asset_id?: string | null;
+      parsing_result_id?: string | null;
+      source_type?: OCRTestSourceType | string | null;
+      raw_text: string;
+      layout_graph?: Record<string, unknown> | null;
+    }>;
     live_sessions?: Array<Record<string, unknown>>;
     meet_and_greet_sessions?: Array<Record<string, unknown>>;
     session?: OCRUploadSession | null;
@@ -419,6 +432,12 @@ export interface OCREvaluationEventAggregateCandidate {
   source_node_ids: string[];
   confidence: number;
   reasons: string[];
+  source_asset_ids?: string[];
+  parsing_result_ids?: string[];
+  source_type?: OCRTestSourceType | string | null;
+  candidate_generation_method?: string | null;
+  candidate_model?: string | null;
+  candidate_version?: string | null;
 }
 
 export interface OCREvaluationResultItem {
