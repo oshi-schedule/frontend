@@ -5,12 +5,14 @@ const links = [
   ["/admin/events", "Events"],
   ["/admin/groups", "Groups"],
   ["/admin/venues", "Venues"],
-  ["/admin/sources", "Sources"]
+  ["/admin/training-dataset", "Labeling"],
+  ["/admin/event-candidate-reviews", "Analytics"],
+  ["/admin/ocr-evaluation", "OCR Lab"],
 ];
 
 export function AdminNav() {
   return (
-    <div className="grid grid-cols-4 gap-2">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
       {links.map(([href, label]) => (
         <Link key={href} href={href}>
           <Card className="p-2 text-center text-xs font-semibold">{label}</Card>

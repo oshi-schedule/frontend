@@ -30,6 +30,37 @@ function StatCard({ label, value, icon: Icon, href, color }: StatCardProps) {
   );
 }
 
+const quickMenuSections = [
+  {
+    title: "Labeling",
+    description: "SourceからEvent Candidate正解データを作る主導線です。",
+    items: [
+      { href: "/admin/training-dataset", label: "Event Candidate Labeling", desc: "Source → EventCandidate → 正解JSONを蓄積。Event Core登録なし" },
+      { href: "/admin/event-candidate-review", label: "Candidate Review", desc: "OCR Draft由来のpending候補を確認・修正" },
+      { href: "/admin/event-candidate-reviews", label: "Dataset Analytics", desc: "レビュー件数と項目別修正率から弱点を確認" },
+      { href: "/admin/ocr-test", label: "OCR Draft Upload", desc: "Upload Session単位でOCR Draftを作成する補助導線" },
+    ],
+  },
+  {
+    title: "Core Admin",
+    description: "Event Coreと基本マスタを管理します。",
+    items: [
+      { href: "/admin/events/new", label: "新規イベント登録", desc: "イベントとタイムテーブルを手動作成" },
+      { href: "/admin/events", label: "Events", desc: "登録済みイベントを確認・編集" },
+      { href: "/admin/sources", label: "Sources", desc: "投入済みSourceを確認" },
+      { href: "/admin/merge", label: "Merge", desc: "Group / Venue / Event を統合" },
+    ],
+  },
+  {
+    title: "Labs",
+    description: "抽出器とVisionの実験用。教師データ作成の入口ではありません。",
+    items: [
+      { href: "/admin/ocr-evaluation", label: "OCR Evaluation Lab", desc: "100枚までのSourceKind / LayoutGraph一括評価" },
+      { href: "/admin/vision-structure-test", label: "Vision Structure Test", desc: "GPT Visionのcontainer / session構造を観測して保存" },
+    ],
+  },
+];
+
 export default function AdminDashboardPage() {
   const stats = useQuery({ queryKey: ["admin-stats"], queryFn: getAdminStats });
 
@@ -71,23 +102,24 @@ export default function AdminDashboardPage() {
         />
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {[
-          { href: "/admin/events/new", label: "新規イベント登録", desc: "イベントとタイムテーブルを作成" },
-          { href: "/admin/merge", label: "Merge", desc: "Group / Venue / Event を統合" },
-          { href: "/admin/sources", label: "Source確認", desc: "OCR投入待ちのSourceを確認" },
-          { href: "/admin/ocr-test", label: "OCR Ground Truth", desc: "Upload Session単位でOCR・レビュー・教師データ作成" },
-          { href: "/admin/event-candidate-review", label: "Event Candidate Review", desc: "OCR由来のイベント候補を採用・修正・却下" },
-          { href: "/admin/event-candidate-reviews", label: "教師データ分析", desc: "レビュー件数と項目別修正率からOCRの弱点を確認" },
-          { href: "/admin/ocr-evaluation", label: "OCR Evaluation Lab", desc: "100枚までのSourceKind / LayoutGraph一括評価。教師データ入口ではありません" },
-          { href: "/admin/vision-structure-test", label: "Vision Structure Test", desc: "GPT Visionのcontainer / session構造を観測して保存" },
-        ].map(({ href, label, desc }) => (
-          <Link key={href} href={href}>
-            <Card className="p-4 hover:shadow-md transition-shadow cursor-pointer h-full">
-              <p className="font-bold text-sm">{label}</p>
-              <p className="mt-1 text-xs text-[var(--muted)]">{desc}</p>
-            </Card>
-          </Link>
+      <div className="space-y-5">
+        {quickMenuSections.map((section) => (
+          <section key={section.title} className="space-y-3">
+            <div>
+              <h2 className="text-sm font-bold uppercase tracking-[0.16em] text-slate-500">{section.title}</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">{section.description}</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {section.items.map(({ href, label, desc }) => (
+                <Link key={href} href={href}>
+                  <Card className="p-4 hover:shadow-md transition-shadow cursor-pointer h-full">
+                    <p className="font-bold text-sm">{label}</p>
+                    <p className="mt-1 text-xs text-[var(--muted)]">{desc}</p>
+                  </Card>
+                </Link>
+              ))}
+            </div>
+          </section>
         ))}
       </div>
     </div>

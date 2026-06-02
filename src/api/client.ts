@@ -31,6 +31,10 @@ function buildUrl(path: string, query?: ApiOptions["query"]) {
   return url.toString();
 }
 
+export function apiUrl(path: string, query?: ApiOptions["query"]) {
+  return buildUrl(path, query);
+}
+
 export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;

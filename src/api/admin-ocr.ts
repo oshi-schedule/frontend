@@ -308,6 +308,46 @@ export interface VisionEventStructureTestResponse {
   error: string | null;
 }
 
+export type TrainingDatasetMode = "single" | "multi";
+export type TrainingDatasetJobStatus = "queued" | "running" | "completed" | "failed";
+
+export interface TrainingEventCandidateRead {
+  id: string;
+  job_id: string;
+  source_id: string | null;
+  upload_session_id: string | null;
+  source_type: string | null;
+  single_multi: TrainingDatasetMode | string;
+  input_payload_json: Record<string, unknown>;
+  prediction_json: Record<string, unknown>;
+  ground_truth_json: Record<string, unknown> | null;
+  review_status: string;
+  reviewer: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrainingDatasetJobRead {
+  job_id: string;
+  status: TrainingDatasetJobStatus | string;
+  progress: number;
+  message: string;
+  current_step: string | null;
+  mode: TrainingDatasetMode | string;
+  total_files: number;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  candidate_id: string | null;
+  candidate: TrainingEventCandidateRead | null;
+}
+
+export interface TrainingDatasetCandidateListResponse {
+  items: TrainingEventCandidateRead[];
+}
+
 export interface OCRTimetableReviewRevision {
   id: string;
   session_id: string;
@@ -763,6 +803,52 @@ export function updateOCRVisionEvaluationHumanScore(runId: string, humanScore: n
 
 export function runVisionEventStructureTest(payload: VisionEventStructureTestRequest) {
   return apiFetch<VisionEventStructureTestResponse>("/admin/vision-structure-test", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createTrainingDatasetJob(files: File[], options: { mode: TrainingDatasetMode; sourceType?: string }) {
+  if (files.length === 0) {
+    throw new Error("少なくとも1枚の画像を選択してください");
+  }
+  if (files.length > 4) {
+    throw new Error("Training Datasetでは画像は最大4枚までです");
+  }
+  if (options.mode === "single" && files.length !== 1) {
+    throw new Error("Single modeでは画像を1枚だけ選択してください");
+  }
+  if (options.mode === "multi" && files.length < 2) {
+    throw new Error("Multi modeでは画像を2枚以上選択してください");
+  }
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+  formData.append("mode", options.mode);
+  formData.append("source_type", options.sourceType ?? "training_dataset");
+  return apiFetch<TrainingDatasetJobRead>("/admin/training-dataset/jobs", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export function getTrainingDatasetJob(jobId: string) {
+  return apiFetch<TrainingDatasetJobRead>(`/admin/training-dataset/jobs/${jobId}`);
+}
+
+export function listTrainingDatasetCandidates(options: { limit?: number; review_status?: string | null } = {}) {
+  return apiFetch<TrainingDatasetCandidateListResponse>("/admin/training-dataset", {
+    query: {
+      limit: options.limit ?? 50,
+      review_status: options.review_status,
+    },
+  });
+}
+
+export function saveTrainingDatasetGroundTruth(
+  candidateId: string,
+  payload: { ground_truth_json: Record<string, unknown>; reviewer?: string | null },
+) {
+  return apiFetch<TrainingEventCandidateRead>(`/admin/training-dataset/${candidateId}/ground-truth`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
