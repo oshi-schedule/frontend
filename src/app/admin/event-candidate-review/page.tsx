@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ClipboardCopy, Edit3, ImageIcon, Plus, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, ClipboardCopy, Edit3, ImageIcon, XCircle } from "lucide-react";
 import {
   createEventCandidateReview,
   listEventCandidateReviews,
@@ -22,6 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 const EVENT_CANDIDATE_REVIEW_BUNDLE_KEY = "oshi_sche_event_candidate_review_bundle";
 const EVENT_CANDIDATE_REVIEW_RESULTS_KEY = "oshi_sche_event_candidate_review_results";
+const EVENT_CANDIDATE_REVIEW_LAST_GROUP_CANDIDATES_KEY = "oshi_sche_last_group_candidates_json";
 
 type ReviewStatus = "pending" | "approved" | "edited" | "rejected";
 
@@ -57,8 +58,10 @@ interface CandidateReviewEditedValues {
   venue_name?: string | null;
   open_time?: string | null;
   start_time?: string | null;
-  group_candidates?: string[];
+  group_candidates?: GroupCandidateReviewValue[];
 }
+
+type GroupCandidateReviewValue = string | Record<string, unknown>;
 
 interface CandidateReviewResult {
   review_status: ReviewStatus;
@@ -123,25 +126,70 @@ function candidateToOcrOutput(candidate: OCREvaluationEventAggregateCandidate): 
     venue_name: candidate.venue_name,
     open_time: candidate.open_time,
     start_time: candidate.start_time,
-    group_candidates: candidate.group_candidates.map((group) => group.group_name),
+    group_candidates: candidate.group_candidates,
   };
 }
 
-function parseGroups(names: string[]): string[] {
-  return names
-    .map((name) => name.trim())
-    .filter(Boolean)
-    .filter((name, index, names) => names.indexOf(name) === index);
+function normalizeGroupCandidateValue(value: unknown): GroupCandidateReviewValue | null {
+  if (typeof value === "string") {
+    const name = value.trim();
+    return name || null;
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    const groupName = typeof record.group_name === "string" ? record.group_name.trim() : "";
+    if (!name && !groupName) return null;
+    return {
+      ...record,
+      ...(name ? { name } : {}),
+      ...(groupName ? { group_name: groupName } : {}),
+    };
+  }
+  return null;
 }
 
-function formValues(eventName: string, eventDate: string, venueName: string, openTime: string, startTime: string, groupNames: string[]): CandidateReviewEditedValues {
+function parseGroupCandidatesJson(rawValue: string): GroupCandidateReviewValue[] {
+  const text = rawValue.trim();
+  if (!text) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("group_candidates のJSON形式が不正です。配列として入力してください。");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("group_candidates はJSON配列で入力してください。");
+  }
+  return parsed
+    .map(normalizeGroupCandidateValue)
+    .filter((value): value is GroupCandidateReviewValue => value !== null);
+}
+
+function groupCandidatesToJson(value: unknown): string {
+  const groups = Array.isArray(value)
+    ? value
+        .map(normalizeGroupCandidateValue)
+        .filter((item): item is GroupCandidateReviewValue => item !== null)
+    : [];
+  return JSON.stringify(groups, null, 2);
+}
+
+function formValues(
+  eventName: string,
+  eventDate: string,
+  venueName: string,
+  openTime: string,
+  startTime: string,
+  groupCandidates: GroupCandidateReviewValue[]
+): CandidateReviewEditedValues {
   return {
     event_name: eventName.trim() || null,
     event_date: eventDate.trim() || null,
     venue_name: venueName.trim() || null,
     open_time: openTime.trim() || null,
     start_time: startTime.trim() || null,
-    group_candidates: parseGroups(groupNames),
+    group_candidates: groupCandidates,
   };
 }
 
@@ -206,7 +254,8 @@ export default function EventCandidateReviewPage() {
   const [venueName, setVenueName] = useState("");
   const [openTime, setOpenTime] = useState("");
   const [startTime, setStartTime] = useState("");
-  const [groupNames, setGroupNames] = useState<string[]>([]);
+  const [groupCandidatesJson, setGroupCandidatesJson] = useState("[]");
+  const [groupCandidatesJsonError, setGroupCandidatesJsonError] = useState<string | null>(null);
   const [reviewerNote, setReviewerNote] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -270,7 +319,8 @@ export default function EventCandidateReviewPage() {
     setVenueName(values.venue_name ?? "");
     setOpenTime(values.open_time ?? "");
     setStartTime(values.start_time ?? "");
-    setGroupNames(values.group_candidates ?? []);
+    setGroupCandidatesJson(groupCandidatesToJson(values.group_candidates ?? []));
+    setGroupCandidatesJsonError(null);
     setReviewerNote(selectedReview?.reviewer_note ?? "");
   }, [selectedItem, selectedReview]);
 
@@ -286,12 +336,12 @@ export default function EventCandidateReviewPage() {
     );
   }, [bundle?.items, reviewResults]);
 
-  function makeReviewResult(status: ReviewStatus): CandidateReviewResult {
+  function makeReviewResult(status: ReviewStatus, groupCandidates: GroupCandidateReviewValue[]): CandidateReviewResult {
     if (!selectedItem) {
       throw new Error("候補が選択されていません");
     }
     const originalValues = candidateToOcrOutput(selectedItem.event_aggregate_candidate);
-    const editedValues = formValues(eventName, eventDate, venueName, openTime, startTime, groupNames);
+    const editedValues = formValues(eventName, eventDate, venueName, openTime, startTime, groupCandidates);
     return {
       review_status: status,
       approved: status === "approved",
@@ -307,10 +357,20 @@ export default function EventCandidateReviewPage() {
   async function saveReview(status: EventCandidateReviewFinalStatus) {
     if (!selectedItem) return;
     setSaveError(null);
+    setGroupCandidatesJsonError(null);
+    let parsedGroupCandidates: GroupCandidateReviewValue[] = [];
+    try {
+      parsedGroupCandidates = parseGroupCandidatesJson(groupCandidatesJson);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "group_candidates のJSON形式が不正です。";
+      setGroupCandidatesJsonError(message);
+      setSaveError(message);
+      return;
+    }
     setIsSavingReview(true);
-    const localReview = makeReviewResult(status);
+    const localReview = makeReviewResult(status, parsedGroupCandidates);
     const originalJson = candidateToOcrOutput(selectedItem.event_aggregate_candidate);
-    const editedJson = formValues(eventName, eventDate, venueName, openTime, startTime, groupNames);
+    const editedJson = formValues(eventName, eventDate, venueName, openTime, startTime, parsedGroupCandidates);
     let persistedReview: EventCandidateReviewRead | null = null;
     try {
       const reviewJson = {
@@ -344,6 +404,7 @@ export default function EventCandidateReviewPage() {
         });
       }
       setLastSavedReview(persistedReview);
+      window.localStorage.setItem(EVENT_CANDIDATE_REVIEW_LAST_GROUP_CANDIDATES_KEY, JSON.stringify(parsedGroupCandidates, null, 2));
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "レビュー結果のDB保存に失敗しました");
       setIsSavingReview(false);
@@ -363,16 +424,36 @@ export default function EventCandidateReviewPage() {
     setIsSavingReview(false);
   }
 
-  function updateGroupName(index: number, groupName: string) {
-    setGroupNames((current) => current.map((value, currentIndex) => (currentIndex === index ? groupName : value)));
+  function handleGroupCandidatesJsonChange(value: string) {
+    setGroupCandidatesJson(value);
+    setGroupCandidatesJsonError(null);
   }
 
-  function addGroupName() {
-    setGroupNames((current) => [...current, ""]);
+  function handleFormatGroupCandidatesJson() {
+    try {
+      const parsed = parseGroupCandidatesJson(groupCandidatesJson);
+      setGroupCandidatesJson(JSON.stringify(parsed, null, 2));
+      setGroupCandidatesJsonError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "group_candidates のJSON形式が不正です。";
+      setGroupCandidatesJsonError(message);
+    }
   }
 
-  function removeGroupName(index: number) {
-    setGroupNames((current) => current.filter((_, currentIndex) => currentIndex !== index));
+  function handleCopyPreviousGroupCandidates() {
+    const previous = window.localStorage.getItem(EVENT_CANDIDATE_REVIEW_LAST_GROUP_CANDIDATES_KEY);
+    if (!previous) {
+      setGroupCandidatesJsonError("前回保存した group_candidates がありません。");
+      return;
+    }
+    try {
+      const parsed = parseGroupCandidatesJson(previous);
+      setGroupCandidatesJson(JSON.stringify(parsed, null, 2));
+      setGroupCandidatesJsonError(null);
+    } catch {
+      setGroupCandidatesJson(previous);
+      setGroupCandidatesJsonError("前回保存した group_candidates のJSON形式が不正です。");
+    }
   }
 
   if (!bundle) {
@@ -582,39 +663,30 @@ export default function EventCandidateReviewPage() {
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">group_candidates</span>
-                        <Button type="button" onClick={addGroupName} className="h-8 bg-white px-3 text-xs text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50">
-                          <Plus className="h-3.5 w-3.5" />
-                          グループ追加
-                        </Button>
+                        <div className="flex flex-wrap gap-2">
+                          <Button type="button" onClick={handleFormatGroupCandidatesJson} className="h-8 bg-white px-3 text-xs text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50">
+                            JSON整形
+                          </Button>
+                          <Button type="button" onClick={handleCopyPreviousGroupCandidates} className="h-8 bg-white px-3 text-xs text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50">
+                            前回をコピー
+                          </Button>
+                        </div>
                       </div>
-                      <div className="space-y-2">
-                        {groupNames.length ? (
-                          groupNames.map((groupName, index) => (
-                            <div key={`review-group-${index}`} className="flex gap-2">
-                              <Input
-                                value={groupName}
-                                onChange={(event) => {
-                                  const value = event.currentTarget.value;
-                                  updateGroupName(index, value);
-                                }}
-                                placeholder={`グループ名 ${index + 1}`}
-                              />
-                              <Button
-                                type="button"
-                                className="h-10 w-10 shrink-0 bg-white p-0 text-red-600 ring-1 ring-slate-200 hover:bg-red-50 hover:text-red-700"
-                                onClick={() => removeGroupName(index)}
-                                aria-label={`グループ候補 ${index + 1} を削除`}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-500">
-                            グループ候補は未入力です。「グループ追加」から追加できます。
-                          </div>
-                        )}
-                      </div>
+                      <Textarea
+                        value={groupCandidatesJson}
+                        onChange={(event) => handleGroupCandidatesJsonChange(event.currentTarget.value)}
+                        className="min-h-44 font-mono text-xs leading-relaxed"
+                        placeholder={`[
+  { "name": "宵越しのアンサンブル" },
+  { "name": "RiNCENT" }
+]`}
+                      />
+                      <p className="text-[11px] leading-relaxed text-slate-500">
+                        JSON配列で直接編集できます。既存互換として <span className="font-mono">["グループ名"]</span> 形式も保存できます。
+                      </p>
+                      {groupCandidatesJsonError ? (
+                        <p className="rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">{groupCandidatesJsonError}</p>
+                      ) : null}
                     </div>
                     <label className="space-y-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">reviewer_note</span>

@@ -131,7 +131,7 @@ function buildReviewPrefill(candidate: OCREvaluationEventAggregateCandidate | nu
     venue_name: candidate?.venue_name ?? null,
     open_time: candidate?.open_time ?? null,
     start_time: candidate?.start_time ?? null,
-    group_candidates: (candidate?.group_candidates ?? []).map((group) => group.group_name),
+    group_candidates: candidate?.group_candidates ?? [],
   };
 }
 
