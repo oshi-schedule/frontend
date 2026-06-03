@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ClipboardCopy, ExternalLink, Loader2, Play, Plus, RefreshCw, Save, Trash2, Wand2 } from "lucide-react";
 import { apiUrl } from "@/api/client";
 import {
@@ -119,10 +119,10 @@ function editableSessionRows(value: unknown): JsonRecord[] {
     return {
       ...record,
       session_type: String(record.session_type ?? "performance"),
-        group_name: String(record.group_name ?? record.performer_name ?? ""),
-        title: String(record.title ?? ""),
-        venue_name: String(record.venue_name ?? ""),
-        stage_name: String(record.stage_name ?? record.venue_name ?? record.booth_name ?? ""),
+      group_name: String(record.group_name ?? record.performer_name ?? ""),
+      title: String(record.title ?? ""),
+      venue_name: String(record.venue_name ?? ""),
+      stage_name: String(record.stage_name ?? record.venue_name ?? record.booth_name ?? ""),
       start_time: String(record.start_time ?? ""),
       end_time: String(record.end_time ?? ""),
       note: String(record.note ?? ""),
@@ -193,6 +193,10 @@ function buildGroundTruthPayloadFromDraft(draft: JsonRecord): JsonRecord {
   };
 }
 
+function emptyGroundTruthDraft(): JsonRecord {
+  return normalizeGroundTruthDraft({});
+}
+
 function JsonBlock({ value }: { value: unknown }) {
   return (
     <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 p-3 text-xs leading-relaxed text-slate-100">
@@ -223,14 +227,40 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function EventDiffTable({ current, gpt, groundTruth }: { current: JsonRecord; gpt: JsonRecord; groundTruth: JsonRecord }) {
+function EventDiffTable({
+  current,
+  gpt,
+  groundTruth,
+  onChange,
+  onCopyGpt,
+  onSave,
+  saving,
+}: {
+  current: JsonRecord;
+  gpt: JsonRecord;
+  groundTruth: JsonRecord;
+  onChange: (field: string, value: string) => void;
+  onCopyGpt: () => void;
+  onSave: () => void;
+  saving: boolean;
+}) {
   return (
     <Card className="overflow-hidden p-0">
-      <div className="border-b border-slate-200 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
         <h2 className="font-bold">event_candidate</h2>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={onCopyGpt} disabled={Object.keys(gpt).length === 0}>
+            <Wand2 className="h-4 w-4" />
+            GPT-5.4を転記
+          </Button>
+          <Button type="button" onClick={onSave} disabled={saving}>
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            保存
+          </Button>
+        </div>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-left text-sm">
+        <table className="w-full min-w-[980px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500">
             <tr>
               <th className="px-4 py-3">Field</th>
@@ -250,7 +280,13 @@ function EventDiffTable({ current, gpt, groundTruth }: { current: JsonRecord; gp
                   <td className="px-4 py-3 font-mono font-semibold">{field}</td>
                   <td className={`px-4 py-3 ${currentOk ? "bg-emerald-50 text-emerald-800" : ""}`}>{textValue(current[field])}</td>
                   <td className={`px-4 py-3 ${gptOk ? "bg-emerald-50 text-emerald-800" : ""}`}>{textValue(gpt[field])}</td>
-                  <td className="px-4 py-3 font-semibold text-slate-950">{textValue(gt)}</td>
+                  <td className="px-4 py-3">
+                    <input
+                      value={String(gt ?? "")}
+                      onChange={(event) => onChange(field, event.target.value)}
+                      className="h-10 w-full min-w-[260px] rounded-md border border-slate-200 px-3 font-semibold text-slate-950"
+                    />
+                  </td>
                 </tr>
               );
             })}
@@ -299,6 +335,72 @@ function GroupDiff({ label, groups, groundTruthGroups }: { label: string; groups
   );
 }
 
+function EditableGroupDiff({
+  groups,
+  onAdd,
+  onRemove,
+  onCopyGpt,
+}: {
+  groups: string[];
+  onAdd: (name: string) => void;
+  onRemove: (index: number) => void;
+  onCopyGpt: () => void;
+}) {
+  const [input, setInput] = useState("");
+
+  function handleAdd() {
+    const name = input.trim();
+    if (!name) return;
+    onAdd(name);
+    setInput("");
+  }
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <h3 className="font-bold">Ground Truth</h3>
+          <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">{groups.length}</span>
+        </div>
+        <Button type="button" variant="outline" onClick={onCopyGpt}>
+          <Wand2 className="h-4 w-4" />
+          GPT-5.4を転記
+        </Button>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {groups.map((name, index) => (
+          <button
+            type="button"
+            key={`${name}-${index}`}
+            onClick={() => onRemove(index)}
+            className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-red-100 hover:text-red-700"
+          >
+            + {name} ×
+          </button>
+        ))}
+        {groups.length === 0 ? <span className="text-sm text-slate-500">なし</span> : null}
+      </div>
+      <div className="mt-3 flex gap-2 border-t border-slate-100 pt-3">
+        <input
+          value={input}
+          onChange={(event) => setInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              handleAdd();
+            }
+          }}
+          className="h-9 min-w-0 flex-1 rounded-md border border-slate-200 px-3 text-sm"
+        />
+        <Button type="button" variant="outline" onClick={handleAdd}>
+          <Plus className="h-4 w-4" />
+          Add
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function SessionTable({ label, value }: { label: string; value: unknown }) {
   const rows = sessionRows(value);
   const counts = sessionCounts(value);
@@ -312,7 +414,7 @@ function SessionTable({ label, value }: { label: string; value: unknown }) {
         <p className="mt-1 text-xs text-slate-500">Performance {counts.performance} / Meet&Greet {counts.meetAndGreet}</p>
       </div>
       <div className="max-h-80 overflow-auto">
-        <table className="w-full text-left text-xs">
+        <table className="w-full min-w-[620px] text-left text-xs">
           <thead className="sticky top-0 bg-slate-50 uppercase tracking-[0.1em] text-slate-500">
             <tr>
               <th className="px-3 py-2">Type</th>
@@ -344,251 +446,101 @@ function SessionTable({ label, value }: { label: string; value: unknown }) {
   );
 }
 
-function GroundTruthEditor({
-  draft,
-  setDraft,
-  onDirty,
+function EditableSessionTable({
+  value,
   onCopyGpt,
-  onCopyCurrent,
-  onSave,
-  saving,
-  dirty,
-  hasGpt,
+  onChange,
+  onAdd,
+  onRemove,
 }: {
-  draft: JsonRecord;
-  setDraft: Dispatch<SetStateAction<JsonRecord>>;
-  onDirty: () => void;
   onCopyGpt: () => void;
-  onCopyCurrent: () => void;
-  onSave: () => void;
-  saving: boolean;
-  dirty: boolean;
-  hasGpt: boolean;
+  value: unknown;
+  onChange: (index: number, field: string, value: string) => void;
+  onAdd: () => void;
+  onRemove: (index: number) => void;
 }) {
-  const groups = editableGroupRows(draft.group_candidates);
-  const sessions = editableSessionRows(draft.sessions);
-
-  function updateField(field: string, value: string) {
-    onDirty();
-    setDraft((prev) => ({ ...prev, [field]: value }));
-  }
-
-  function updateGroup(index: number, field: string, value: string) {
-    onDirty();
-    setDraft((prev) => {
-      const nextGroups = editableGroupRows(prev.group_candidates);
-      nextGroups[index] = { ...nextGroups[index], [field]: value };
-      return { ...prev, group_candidates: nextGroups };
-    });
-  }
-
-  function addGroup() {
-    onDirty();
-    setDraft((prev) => ({ ...prev, group_candidates: [...editableGroupRows(prev.group_candidates), { group_name: "", score: null, match_method: "manual" }] }));
-  }
-
-  function removeGroup(index: number) {
-    onDirty();
-    setDraft((prev) => ({ ...prev, group_candidates: editableGroupRows(prev.group_candidates).filter((_, itemIndex) => itemIndex !== index) }));
-  }
-
-  function updateSession(index: number, field: string, value: string) {
-    onDirty();
-    setDraft((prev) => {
-      const nextSessions = editableSessionRows(prev.sessions);
-      nextSessions[index] = { ...nextSessions[index], [field]: value };
-      return { ...prev, sessions: nextSessions };
-    });
-  }
-
-  function addSession() {
-    onDirty();
-    setDraft((prev) => ({
-      ...prev,
-      sessions: [
-        ...editableSessionRows(prev.sessions),
-        { session_type: "performance", group_name: "", title: "", venue_name: "", stage_name: "", start_time: "", end_time: "", note: "" },
-      ],
-    }));
-  }
-
-  function removeSession(index: number) {
-    onDirty();
-    setDraft((prev) => ({ ...prev, sessions: editableSessionRows(prev.sessions).filter((_, itemIndex) => itemIndex !== index) }));
-  }
+  const rows = editableSessionRows(value);
+  const counts = sessionCounts(value);
 
   return (
-    <Card className="space-y-4 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="font-bold">Ground Truth Editor</h2>
-          <p className="mt-1 text-xs text-slate-500">GPT-5.4の結果をコピーして、保存前に表で修正できます。</p>
+    <div className="rounded-md border border-slate-200 bg-white">
+      <div className="border-b border-slate-200 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="font-bold">Ground Truth</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Performance {counts.performance} / Meet&Greet {counts.meetAndGreet}
+            </p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">{counts.total}</span>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={onCopyCurrent}>
-            <ClipboardCopy className="h-4 w-4" />
-            Copy Current
-          </Button>
-          <Button type="button" variant="outline" onClick={onCopyGpt} disabled={!hasGpt}>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={onCopyGpt}>
             <Wand2 className="h-4 w-4" />
-            Copy GPT-5.4
+            GPT-5.4を転記
           </Button>
-          <Button type="button" onClick={onSave} disabled={saving}>
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {saving ? "Saving" : dirty ? "Save Ground Truth" : "Save Ground Truth"}
+          <Button type="button" variant="outline" onClick={onAdd}>
+            <Plus className="h-4 w-4" />
+            Add
           </Button>
         </div>
       </div>
-
-      <div className="overflow-x-auto rounded-md border border-slate-200">
-        <table className="w-full min-w-[760px] text-left text-sm">
-          <thead className="bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500">
+      <div className="max-h-80 overflow-auto">
+        <table className="w-full min-w-[920px] text-left text-xs">
+          <thead className="sticky top-0 bg-slate-50 uppercase tracking-[0.1em] text-slate-500">
             <tr>
-              <th className="px-3 py-2">Field</th>
-              <th className="px-3 py-2">Ground Truth</th>
+              <th className="px-3 py-2">Type</th>
+              <th className="px-3 py-2">Start</th>
+              <th className="px-3 py-2">End</th>
+              <th className="px-3 py-2">Name</th>
+              <th className="px-3 py-2">Place</th>
+              <th className="w-12 px-3 py-2"></th>
             </tr>
           </thead>
           <tbody>
-            {eventFields.map((field) => (
-              <tr key={field} className="border-t border-slate-100">
-                <td className="px-3 py-2 font-mono font-semibold">{field}</td>
+            {rows.map((row, index) => (
+              <tr key={`${index}-${row.group_name}-${row.start_time}`} className="border-t border-slate-100">
                 <td className="px-3 py-2">
-                  <input
-                    value={String(draft[field] ?? "")}
-                    onChange={(event) => updateField(field, event.target.value)}
-                    className="h-9 w-full rounded-md border border-slate-200 px-3 text-sm"
-                  />
+                  <select
+                    value={String(row.session_type ?? "performance")}
+                    onChange={(event) => onChange(index, "session_type", event.target.value)}
+                    className="h-8 w-36 rounded-md border border-slate-200 bg-white px-2"
+                  >
+                    <option value="performance">performance</option>
+                    <option value="meet_and_greet">meet_and_greet</option>
+                    <option value="booth">booth</option>
+                  </select>
+                </td>
+                <td className="px-3 py-2">
+                  <input value={String(row.start_time ?? "")} onChange={(event) => onChange(index, "start_time", event.target.value)} className="h-8 w-24 rounded-md border border-slate-200 px-2" />
+                </td>
+                <td className="px-3 py-2">
+                  <input value={String(row.end_time ?? "")} onChange={(event) => onChange(index, "end_time", event.target.value)} className="h-8 w-24 rounded-md border border-slate-200 px-2" />
+                </td>
+                <td className="px-3 py-2">
+                  <input value={String(row.group_name ?? "")} onChange={(event) => onChange(index, "group_name", event.target.value)} className="h-8 w-44 rounded-md border border-slate-200 px-2" />
+                </td>
+                <td className="px-3 py-2">
+                  <input value={String(row.stage_name ?? row.venue_name ?? "")} onChange={(event) => onChange(index, "stage_name", event.target.value)} className="h-8 w-36 rounded-md border border-slate-200 px-2" />
+                </td>
+                <td className="px-3 py-2">
+                  <button type="button" onClick={() => onRemove(index)} className="grid h-8 w-8 place-items-center rounded-md border border-slate-200 text-slate-500 hover:text-red-700">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </td>
               </tr>
             ))}
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-3 py-5 text-slate-500">
+                  なし
+                </td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
       </div>
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="font-bold">group_candidates</h3>
-          <Button type="button" variant="outline" onClick={addGroup}>
-            <Plus className="h-4 w-4" />
-            Add
-          </Button>
-        </div>
-        <div className="overflow-x-auto rounded-md border border-slate-200">
-          <table className="w-full min-w-[760px] text-left text-sm">
-            <thead className="bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500">
-              <tr>
-                <th className="px-3 py-2">Group</th>
-                <th className="px-3 py-2">Score</th>
-                <th className="px-3 py-2">Method</th>
-                <th className="w-12 px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map((group, index) => (
-                <tr key={`${index}-${group.group_name}`} className="border-t border-slate-100">
-                  <td className="px-3 py-2">
-                    <input
-                      value={String(group.group_name ?? "")}
-                      onChange={(event) => updateGroup(index, "group_name", event.target.value)}
-                      className="h-9 w-full rounded-md border border-slate-200 px-3 text-sm"
-                    />
-                  </td>
-                  <td className="px-3 py-2">
-                    <input
-                      value={String(group.score ?? "")}
-                      onChange={(event) => updateGroup(index, "score", event.target.value)}
-                      className="h-9 w-28 rounded-md border border-slate-200 px-3 text-sm"
-                    />
-                  </td>
-                  <td className="px-3 py-2">
-                    <input
-                      value={String(group.match_method ?? "")}
-                      onChange={(event) => updateGroup(index, "match_method", event.target.value)}
-                      className="h-9 w-full rounded-md border border-slate-200 px-3 text-sm"
-                    />
-                  </td>
-                  <td className="px-3 py-2">
-                    <button type="button" onClick={() => removeGroup(index)} className="grid h-9 w-9 place-items-center rounded-md border border-slate-200 text-slate-500 hover:text-red-700">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {groups.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="px-3 py-5 text-slate-500">
-                    なし
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="font-bold">sessions</h3>
-          <Button type="button" variant="outline" onClick={addSession}>
-            <Plus className="h-4 w-4" />
-            Add
-          </Button>
-        </div>
-        <div className="overflow-x-auto rounded-md border border-slate-200">
-          <table className="w-full min-w-[1120px] text-left text-sm">
-            <thead className="bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500">
-              <tr>
-                <th className="px-3 py-2">Type</th>
-                <th className="px-3 py-2">Start</th>
-                <th className="px-3 py-2">End</th>
-                <th className="px-3 py-2">Group</th>
-                <th className="px-3 py-2">Title</th>
-                <th className="px-3 py-2">Place</th>
-                <th className="px-3 py-2">Note</th>
-                <th className="w-12 px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {sessions.map((session, index) => (
-                <tr key={`${index}-${session.group_name}-${session.start_time}`} className="border-t border-slate-100">
-                  <td className="px-3 py-2">
-                    <select
-                      value={String(session.session_type ?? "performance")}
-                      onChange={(event) => updateSession(index, "session_type", event.target.value)}
-                      className="h-9 w-40 rounded-md border border-slate-200 bg-white px-2 text-sm"
-                    >
-                      <option value="performance">performance</option>
-                      <option value="meet_and_greet">meet_and_greet</option>
-                    </select>
-                  </td>
-                  {(["start_time", "end_time", "group_name", "title", "stage_name", "note"] as const).map((field) => (
-                    <td key={field} className="px-3 py-2">
-                      <input
-                        value={String(session[field] ?? "")}
-                        onChange={(event) => updateSession(index, field, event.target.value)}
-                        className="h-9 w-full rounded-md border border-slate-200 px-3 text-sm"
-                      />
-                    </td>
-                  ))}
-                  <td className="px-3 py-2">
-                    <button type="button" onClick={() => removeSession(index)} className="grid h-9 w-9 place-items-center rounded-md border border-slate-200 text-slate-500 hover:text-red-700">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {sessions.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-3 py-5 text-slate-500">
-                    なし
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </Card>
+    </div>
   );
 }
 
@@ -640,9 +592,9 @@ export default function GptExtractionBenchmarkDetailPage() {
 
   useEffect(() => {
     if (!detail || groundTruthDirty) return;
-    const source = Object.keys(persistedGroundTruth).length ? persistedGroundTruth : currentPrediction;
+    const source = Object.keys(persistedGroundTruth).length ? persistedGroundTruth : emptyGroundTruthDraft();
     setGroundTruthDraft(normalizeGroundTruthDraft(source));
-  }, [detail, persistedGroundTruth, currentPrediction, groundTruthDirty]);
+  }, [detail, persistedGroundTruth, groundTruthDirty]);
 
   async function handleReload() {
     setLoading(true);
@@ -675,17 +627,77 @@ export default function GptExtractionBenchmarkDetailPage() {
     setGroundTruthDirty(true);
   }
 
-  function replaceGroundTruthDraft(source: JsonRecord, label: string) {
-    setError(null);
-    setMessage(`${label}をGround Truth下書きにコピーしました`);
-    setGroundTruthDirty(true);
-    setGroundTruthDraft(
-      normalizeGroundTruthDraft({
-        ...source,
-        correct_item_source_types:
-          groundTruthDraft.correct_item_source_types ?? persistedGroundTruth.correct_item_source_types ?? currentPrediction.correct_item_source_types,
-      }),
-    );
+  function updateGroundTruthField(field: string, value: string) {
+    markGroundTruthDirty();
+    setGroundTruthDraft((prev) => ({ ...prev, [field]: value }));
+  }
+
+  function copyGptEventCandidate() {
+    markGroundTruthDirty();
+    setGroundTruthDraft((prev) => {
+      const next = { ...prev };
+      eventFields.forEach((field) => {
+        next[field] = gptPrediction[field] ?? "";
+      });
+      return normalizeGroundTruthDraft(next);
+    });
+    setMessage("event_candidate にGPT-5.4を転記しました");
+  }
+
+  function copyGptGroups() {
+    markGroundTruthDirty();
+    setGroundTruthDraft((prev) => ({ ...prev, group_candidates: editableGroupRows(gptPrediction.group_candidates) }));
+    setMessage("group_candidates にGPT-5.4を転記しました");
+  }
+
+  function addGroundTruthGroup(name: string) {
+    markGroundTruthDirty();
+    setGroundTruthDraft((prev) => ({
+      ...prev,
+      group_candidates: [...editableGroupRows(prev.group_candidates), { group_name: name, score: null, match_method: "manual" }],
+    }));
+  }
+
+  function removeGroundTruthGroup(index: number) {
+    markGroundTruthDirty();
+    setGroundTruthDraft((prev) => ({
+      ...prev,
+      group_candidates: editableGroupRows(prev.group_candidates).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  }
+
+  function copyGptSessions() {
+    markGroundTruthDirty();
+    setGroundTruthDraft((prev) => ({ ...prev, sessions: editableSessionRows(gptPrediction.sessions) }));
+    setMessage("sessions にGPT-5.4を転記しました");
+  }
+
+  function updateGroundTruthSession(index: number, field: string, value: string) {
+    markGroundTruthDirty();
+    setGroundTruthDraft((prev) => {
+      const nextSessions = editableSessionRows(prev.sessions);
+      nextSessions[index] = { ...nextSessions[index], [field]: value };
+      return { ...prev, sessions: nextSessions };
+    });
+  }
+
+  function addGroundTruthSession() {
+    markGroundTruthDirty();
+    setGroundTruthDraft((prev) => ({
+      ...prev,
+      sessions: [
+        ...editableSessionRows(prev.sessions),
+        { session_type: "performance", group_name: "", title: "", venue_name: "", stage_name: "", start_time: "", end_time: "", note: "" },
+      ],
+    }));
+  }
+
+  function removeGroundTruthSession(index: number) {
+    markGroundTruthDirty();
+    setGroundTruthDraft((prev) => ({
+      ...prev,
+      sessions: editableSessionRows(prev.sessions).filter((_, itemIndex) => itemIndex !== index),
+    }));
   }
 
   async function handleSaveGroundTruth() {
@@ -839,41 +851,55 @@ export default function GptExtractionBenchmarkDetailPage() {
         </Card>
       </div>
 
-      <GroundTruthEditor
-        draft={groundTruthDraft}
-        setDraft={setGroundTruthDraft}
-        onDirty={markGroundTruthDirty}
-        onCopyCurrent={() => replaceGroundTruthDraft(currentPrediction, "Current Prediction")}
-        onCopyGpt={() => replaceGroundTruthDraft(gptPrediction, "GPT-5.4 Result")}
+      <EventDiffTable
+        current={currentPrediction}
+        gpt={gptPrediction}
+        groundTruth={groundTruth}
+        onChange={updateGroundTruthField}
+        onCopyGpt={copyGptEventCandidate}
         onSave={handleSaveGroundTruth}
         saving={savingGroundTruth}
-        dirty={groundTruthDirty}
-        hasGpt={Object.keys(gptPrediction).length > 0}
       />
 
-      <EventDiffTable current={currentPrediction} gpt={gptPrediction} groundTruth={groundTruth} />
-
       <Card className="space-y-3 p-4">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-bold">group_candidates</h2>
-          <CopyButton text={prettyJson({ current: currentGroups, gpt: gptGroups, ground_truth: gtGroups })} />
+          <div className="flex flex-wrap gap-2">
+            <CopyButton text={prettyJson({ current: currentGroups, gpt: gptGroups, ground_truth: gtGroups })} />
+            <Button type="button" onClick={handleSaveGroundTruth} disabled={savingGroundTruth}>
+              {savingGroundTruth ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              保存
+            </Button>
+          </div>
         </div>
         <div className="grid gap-3 lg:grid-cols-3">
           <GroupDiff label="Current" groups={currentGroups} groundTruthGroups={gtGroups} />
           <GroupDiff label="GPT-5.4" groups={gptGroups} groundTruthGroups={gtGroups} />
-          <GroupDiff label="Ground Truth" groups={gtGroups} groundTruthGroups={gtGroups} />
+          <EditableGroupDiff groups={gtGroups} onAdd={addGroundTruthGroup} onRemove={removeGroundTruthGroup} onCopyGpt={copyGptGroups} />
         </div>
       </Card>
 
       <Card className="space-y-3 p-4">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-bold">sessions</h2>
-          <CopyButton text={prettyJson({ current: currentPrediction.sessions, gpt: gptPrediction.sessions, ground_truth: groundTruth.sessions })} />
+          <div className="flex flex-wrap gap-2">
+            <CopyButton text={prettyJson({ current: currentPrediction.sessions, gpt: gptPrediction.sessions, ground_truth: groundTruth.sessions })} />
+            <Button type="button" onClick={handleSaveGroundTruth} disabled={savingGroundTruth}>
+              {savingGroundTruth ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              保存
+            </Button>
+          </div>
         </div>
         <div className="grid gap-3 xl:grid-cols-3">
           <SessionTable label="Current" value={currentPrediction.sessions} />
           <SessionTable label="GPT-5.4" value={gptPrediction.sessions} />
-          <SessionTable label="Ground Truth" value={groundTruth.sessions} />
+          <EditableSessionTable
+            value={groundTruth.sessions}
+            onCopyGpt={copyGptSessions}
+            onChange={updateGroundTruthSession}
+            onAdd={addGroundTruthSession}
+            onRemove={removeGroundTruthSession}
+          />
         </div>
       </Card>
 
