@@ -58,6 +58,16 @@ type ItemSourceTypeDraft = {
   correct_source_type: string;
 };
 
+type GptSectionName = "event_name" | "venues" | "group_candidates" | "sessions";
+
+type GptReviewMetrics = {
+  review_issue_count: number;
+  review_sections_with_issues: GptSectionName[];
+  generated_change_count: number;
+  accepted_change_count: number;
+  rejected_change_count: number;
+};
+
 type GroundTruthForm = {
   correct_source_type: string;
   correct_item_source_types: ItemSourceTypeDraft[];
@@ -480,6 +490,28 @@ function canApplyFixChange(change: TrainingCandidateGptFixChange): boolean {
   return false;
 }
 
+function normalizeMetricSections(issueCounts: {
+  eventNameIssues: Record<string, unknown>[];
+  venueIssues: Record<string, unknown>[];
+  groupIssues: Record<string, unknown>[];
+  sessionIssues: Record<string, unknown>[];
+}): GptSectionName[] {
+  const sections: GptSectionName[] = [];
+  if (issueCounts.eventNameIssues.length > 0) {
+    sections.push("event_name");
+  }
+  if (issueCounts.venueIssues.length > 0) {
+    sections.push("venues");
+  }
+  if (issueCounts.groupIssues.length > 0) {
+    sections.push("group_candidates");
+  }
+  if (issueCounts.sessionIssues.length > 0) {
+    sections.push("sessions");
+  }
+  return sections;
+}
+
 function GptReviewerResult({ review }: { review: TrainingCandidateGptReviewRead }) {
   const result = asRecord(review.review_result_json);
   const extraction = asRecord(result.extraction_review);
@@ -726,7 +758,8 @@ export default function TrainingDatasetReviewPage() {
   const [gptFix, setGptFix] = useState<TrainingCandidateGptFixResponse | null>(null);
   const [isGptFixing, setIsGptFixing] = useState(false);
   const [gptFixError, setGptFixError] = useState<string | null>(null);
-  const [ignoredFixChangeKeys, setIgnoredFixChangeKeys] = useState<string[]>([]);
+  const [rejectedFixChangeKeys, setRejectedFixChangeKeys] = useState<string[]>([]);
+  const [acceptedFixChangeKeys, setAcceptedFixChangeKeys] = useState<string[]>([]);
 
   useEffect(() => {
     void loadCandidate();
@@ -746,7 +779,8 @@ export default function TrainingDatasetReviewPage() {
     setGptReviewError(null);
     setGptFix(null);
     setGptFixError(null);
-    setIgnoredFixChangeKeys([]);
+    setRejectedFixChangeKeys([]);
+    setAcceptedFixChangeKeys([]);
   }, [candidate]);
 
   useEffect(() => {
@@ -770,6 +804,31 @@ export default function TrainingDatasetReviewPage() {
     const values = candidate?.input_payload_json?.item_source_types;
     return Array.isArray(values) ? values.map((item) => String(item ?? "")) : [];
   }, [candidate]);
+
+  const gptMetrics = useMemo<GptReviewMetrics>(() => {
+    const extractionIssues = getGptIssuesForSection(gptReview, "extraction_review");
+    const venueIssues = getGptIssuesForSection(gptReview, "venues_review");
+    const groupIssues = getGptIssuesForSection(gptReview, "group_candidates_review");
+    const sessionIssues = getGptIssuesForSection(gptReview, "sessions_review");
+    const generatedChanges = gptFix?.changes ?? [];
+    const generatedKeys = generatedChanges.map((change, index) => fixChangeKey(change, index));
+    const acceptedCount = acceptedFixChangeKeys.filter((key) => generatedKeys.includes(key)).length;
+    const rejectedCount = rejectedFixChangeKeys.filter((key) => generatedKeys.includes(key)).length;
+    return {
+      review_issue_count: extractionIssues.length + venueIssues.length + groupIssues.length + sessionIssues.length,
+      review_sections_with_issues: normalizeMetricSections({
+        eventNameIssues: extractionIssues,
+        venueIssues,
+        groupIssues,
+        sessionIssues,
+      }),
+      generated_change_count: generatedChanges.length,
+      accepted_change_count: acceptedCount,
+      rejected_change_count: rejectedCount,
+    };
+  }, [gptReview, gptFix, acceptedFixChangeKeys, rejectedFixChangeKeys]);
+
+  const gptAcceptanceRate = gptMetrics.generated_change_count > 0 ? Math.round((gptMetrics.accepted_change_count / gptMetrics.generated_change_count) * 100) : 0;
 
   async function loadCandidate() {
     setIsLoading(true);
@@ -986,6 +1045,7 @@ export default function TrainingDatasetReviewPage() {
         reviewer: "admin",
         review_status: status,
         review_seconds: Math.max(0, Math.round((Date.now() - reviewStartedAt) / 1000)),
+        gpt_metrics: gptMetrics,
         note: reviewNote.trim() || null,
       });
       setCandidate(saved);
@@ -1162,7 +1222,8 @@ export default function TrainingDatasetReviewPage() {
     if (!candidate || !gptReview) return;
     setIsGptFixing(true);
     setGptFixError(null);
-    setIgnoredFixChangeKeys([]);
+    setRejectedFixChangeKeys([]);
+    setAcceptedFixChangeKeys([]);
     try {
       const result = await runTrainingDatasetGptFix(candidate.id, {
         review_result_json: gptReview.review_result_json,
@@ -1180,11 +1241,16 @@ export default function TrainingDatasetReviewPage() {
 
   function ignoreFixChange(change: TrainingCandidateGptFixChange, index: number) {
     const key = fixChangeKey(change, index);
-    setIgnoredFixChangeKeys((current) => (current.includes(key) ? current : [...current, key]));
+    setRejectedFixChangeKeys((current) => (current.includes(key) ? current : [...current, key]));
+    setAcceptedFixChangeKeys((current) => current.filter((item) => item !== key));
   }
 
-  function applyFixChange(change: TrainingCandidateGptFixChange) {
-    if (!canApplyFixChange(change)) return;
+  function applyFixChange(change: TrainingCandidateGptFixChange, changeIndex: number) {
+    const key = fixChangeKey(change, changeIndex);
+    if (!canApplyFixChange(change)) {
+      setSaveMessage("このpatchは反映対象外です。");
+      return;
+    }
     const index = change.index;
     const field = change.field ?? "";
     const nextValue = change.new_value ?? "";
@@ -1231,24 +1297,38 @@ export default function TrainingDatasetReviewPage() {
       }
       return current;
     });
+    setAcceptedFixChangeKeys((current) => (current.includes(key) ? current : [...current, key]));
+    setRejectedFixChangeKeys((current) => current.filter((item) => item !== key));
     setSaveMessage("GPT Fix patchをフォームへ反映しました。保存するとGround Truthに反映されます。");
   }
 
   function applyAndIgnoreFixChange(change: TrainingCandidateGptFixChange, index: number) {
-    applyFixChange(change);
-    ignoreFixChange(change, index);
+    applyFixChange(change, index);
+    const key = fixChangeKey(change, index);
+    setRejectedFixChangeKeys((current) => (current.includes(key) ? current : [...current, key]));
   }
 
   function applyAllFixChanges() {
-    (gptFix?.changes ?? []).forEach((change, index) => {
-      const key = fixChangeKey(change, index);
-      if (!ignoredFixChangeKeys.includes(key)) applyFixChange(change);
+    const generated = gptFix?.changes ?? [];
+    generated.forEach((change, index) => {
+      applyFixChange(change, index);
     });
-    setIgnoredFixChangeKeys((gptFix?.changes ?? []).map(fixChangeKey));
+    const applicableKeys = generated
+      .map((change, index) => fixChangeKey(change, index))
+      .filter((_, index) => canApplyFixChange(generated[index]));
+    setAcceptedFixChangeKeys((current) => {
+      const next = new Set(current);
+      for (const key of applicableKeys) {
+        next.add(key);
+      }
+      return [...next];
+    });
+    setRejectedFixChangeKeys([]);
   }
 
   function rejectAllFixChanges() {
-    setIgnoredFixChangeKeys((gptFix?.changes ?? []).map(fixChangeKey));
+    setRejectedFixChangeKeys((gptFix?.changes ?? []).map((change, index) => fixChangeKey(change, index)));
+    setAcceptedFixChangeKeys([]);
     setSaveMessage("GPT Fix patchを全件無視しました。");
   }
 
@@ -1299,7 +1379,10 @@ export default function TrainingDatasetReviewPage() {
   const applicableGroupIssues = gptGroupIssues.filter(canApplyGroupIssue);
   const applicableSessionIssues = gptSessionIssues.filter(canApplySessionIssue);
   const gptFixChanges = gptFix?.changes ?? [];
-  const activeFixChanges = gptFixChanges.filter((change, index) => !ignoredFixChangeKeys.includes(fixChangeKey(change, index)));
+  const activeFixChanges = gptFixChanges.filter((change, index) => {
+    const key = fixChangeKey(change, index);
+    return !acceptedFixChangeKeys.includes(key) && !rejectedFixChangeKeys.includes(key);
+  });
 
   return (
     <div className="space-y-6">
@@ -1389,6 +1472,36 @@ export default function TrainingDatasetReviewPage() {
       </Card>
 
       {gptReview ? <GptReviewerResult review={gptReview} /> : null}
+      <Card className="min-w-0 space-y-3 border-slate-200 bg-white p-4">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">GPT Metrics</p>
+          <h2 className="mt-1 font-bold text-slate-950">Review × Fix の定量指標</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            直近のレビュー・Patch実行内容を保存時に記録しています。保存前の値が編集中の比較値です。
+          </p>
+        </div>
+        <div className="grid gap-2 text-sm md:grid-cols-3 lg:grid-cols-5">
+          <p className="rounded-xl bg-slate-50 p-3">
+            Review Issues: <span className="font-bold text-slate-900">{gptMetrics.review_issue_count}</span>
+          </p>
+          <p className="rounded-xl bg-slate-50 p-3">
+            Generated Fixes: <span className="font-bold text-slate-900">{gptMetrics.generated_change_count}</span>
+          </p>
+          <p className="rounded-xl bg-slate-50 p-3">
+            Accepted Fixes: <span className="font-bold text-slate-900">{gptMetrics.accepted_change_count}</span>
+          </p>
+          <p className="rounded-xl bg-slate-50 p-3">
+            Rejected Fixes: <span className="font-bold text-slate-900">{gptMetrics.rejected_change_count}</span>
+          </p>
+          <p className="rounded-xl bg-slate-50 p-3">
+            Acceptance Rate: <span className="font-bold text-slate-900">{gptAcceptanceRate}%</span>
+          </p>
+        </div>
+        <p className="text-xs text-slate-600">
+          Review Sections:{" "}
+          {gptMetrics.review_sections_with_issues.length ? gptMetrics.review_sections_with_issues.join(", ") : "差分なし"}
+        </p>
+      </Card>
 
       {gptFix ? (
         <Card className="min-w-0 space-y-4 border-emerald-200 bg-emerald-50 p-5">
@@ -1413,15 +1526,23 @@ export default function TrainingDatasetReviewPage() {
           <div className="grid gap-3 text-sm font-semibold text-slate-700 md:grid-cols-4">
             <p className="rounded-xl bg-white p-3">changes {gptFixChanges.length}</p>
             <p className="rounded-xl bg-white p-3">active {activeFixChanges.length}</p>
-            <p className="rounded-xl bg-white p-3">ignored {ignoredFixChangeKeys.length}</p>
+            <p className="rounded-xl bg-white p-3">accepted {gptMetrics.accepted_change_count}</p>
+            <p className="rounded-xl bg-white p-3">rejected {gptMetrics.rejected_change_count}</p>
             <p className="rounded-xl bg-white p-3">cost {gptFix.estimated_cost_usd != null ? `$${gptFix.estimated_cost_usd}` : "$-"}</p>
           </div>
           <div className="space-y-2">
             {gptFixChanges.map((change, index) => {
               const key = fixChangeKey(change, index);
-              const ignored = ignoredFixChangeKeys.includes(key);
+              const rejected = rejectedFixChangeKeys.includes(key);
+              const applied = acceptedFixChangeKeys.includes(key);
+              const resolved = applied || rejected;
               return (
-                <div key={key} className={`grid gap-3 rounded-2xl border p-4 text-sm md:grid-cols-[minmax(0,1fr)_auto] md:items-center ${ignored ? "border-slate-200 bg-white/70 opacity-60" : "border-emerald-200 bg-white"}`}>
+                <div
+                  key={key}
+                  className={`grid gap-3 rounded-2xl border p-4 text-sm md:grid-cols-[minmax(0,1fr)_auto] md:items-center ${
+                    resolved ? "border-slate-200 bg-white/70 opacity-60" : "border-emerald-200 bg-white"
+                  }`}
+                >
                   <div className="min-w-0">
                     <div className="flex flex-wrap gap-2 text-xs font-bold">
                       <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">{change.section}</span>
@@ -1437,10 +1558,15 @@ export default function TrainingDatasetReviewPage() {
                     <p className="mt-1 text-xs text-slate-500">{change.reason}</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button type="button" size="sm" variant="outline" onClick={() => ignoreFixChange(change, index)} disabled={ignored}>
+                    <Button type="button" size="sm" variant="outline" onClick={() => ignoreFixChange(change, index)} disabled={resolved}>
                       無視
                     </Button>
-                    <Button type="button" size="sm" onClick={() => applyAndIgnoreFixChange(change, index)} disabled={ignored || !canApplyFixChange(change)}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => applyAndIgnoreFixChange(change, index)}
+                      disabled={resolved || !canApplyFixChange(change)}
+                    >
                       適用
                     </Button>
                   </div>

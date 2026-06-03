@@ -1051,6 +1051,7 @@ export function saveTrainingDatasetGroundTruth(
     reviewer?: string | null;
     review_status?: string;
     review_seconds?: number | null;
+    gpt_metrics?: Record<string, unknown> | null;
     note?: string | null;
   },
 ) {
