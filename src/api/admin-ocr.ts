@@ -1189,6 +1189,7 @@ export function runGptExtractionBenchmark(candidateId: string, payload: { benchm
 export function runAllPendingGptExtractionBenchmarks(payload: {
   benchmark_model?: string | null;
   review_status?: string | null;
+  benchmark_status?: string | null;
   limit?: number;
 } = {}) {
   return apiFetch<TrainingCandidateBenchmarkRunAllResponse>("/admin/labs/gpt-extraction-benchmark/run-all-pending", {
@@ -1197,6 +1198,7 @@ export function runAllPendingGptExtractionBenchmarks(payload: {
       benchmark_type: "image_direct",
       benchmark_model: payload.benchmark_model ?? null,
       review_status: payload.review_status ?? "pending",
+      benchmark_status: payload.benchmark_status ?? "not_run",
       limit: payload.limit ?? 50,
     }),
   });

@@ -72,6 +72,7 @@ export default function GptExtractionBenchmarkPage() {
     () => items.some((item) => ["pending", "running"].includes(item.latest_benchmark?.status ?? "")),
     [items],
   );
+  const canRunAll = benchmarkStatus === "" || benchmarkStatus === "not_run";
 
   async function load() {
     setError(null);
@@ -139,6 +140,7 @@ export default function GptExtractionBenchmarkPage() {
       const result = await runAllPendingGptExtractionBenchmarks({
         benchmark_model: model.trim() || null,
         review_status: reviewStatus || "pending",
+        benchmark_status: benchmarkStatus || "not_run",
         limit,
       });
       setMessage(`${result.created_count}件をRQへ投入しました / skipped ${result.skipped_candidate_ids.length}`);
@@ -214,7 +216,7 @@ export default function GptExtractionBenchmarkPage() {
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               Reload
             </Button>
-            <Button type="button" onClick={handleRunAllPending} disabled={runningAll}>
+            <Button type="button" onClick={handleRunAllPending} disabled={runningAll || !canRunAll}>
               {runningAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               Run All Pending
             </Button>
