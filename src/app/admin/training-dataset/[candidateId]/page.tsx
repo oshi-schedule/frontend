@@ -216,7 +216,7 @@ function JsonBlock({ value }: { value: unknown }) {
   );
 }
 
-function CopyButton({ text }: { text: string }) {
+function CopyButton({ text, label = "Copy", copiedLabel = "Copied" }: { text: string; label?: string; copiedLabel?: string }) {
   const [copied, setCopied] = useState(false);
 
   function handleCopy() {
@@ -229,7 +229,7 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button type="button" onClick={handleCopy} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-500 hover:text-slate-900">
       <ClipboardCopy className="h-3.5 w-3.5" />
-      {copied ? "Copied" : "Copy"}
+      {copied ? copiedLabel : label}
     </button>
   );
 }
@@ -296,10 +296,13 @@ function buildExtractionReviewCopyPayload(
   groupJson: string,
   sessionJson: string,
 ): Record<string, unknown> {
+  const groundTruthJson = buildGroundTruthPayload(form);
   return {
     candidate_id: candidate.id,
     processing_route: candidate.processing_route ?? candidate.input_payload_json?.processing_route ?? candidate.input_payload_json?.selected_route ?? null,
     extraction_review_json: candidate.extraction_plan ?? candidate.input_payload_json?.extraction_plan ?? {},
+    event_candidate_prediction_json: candidate.prediction_json,
+    ground_truth_json: groundTruthJson,
     group_candidates: parseJsonArrayOrFallback(groupJson, form.group_candidates),
     sessions: parseJsonArrayOrFallback(sessionJson, form.sessions),
   };
@@ -872,7 +875,7 @@ export default function TrainingDatasetReviewPage() {
                   Session全体は source_type ではなく、画像ごとの分類結果から選ばれた処理戦略として扱います。
                 </p>
               </div>
-              <CopyButton text={prettyJson(extractionReviewCopyPayload)} />
+              <CopyButton text={prettyJson(extractionReviewCopyPayload)} label="一括コピー" copiedLabel="一括コピー済み" />
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <div className="rounded-xl bg-slate-50 p-3">
@@ -1337,8 +1340,8 @@ export default function TrainingDatasetReviewPage() {
       <div className="grid min-w-0 gap-4 lg:grid-cols-2">
         <Card className="min-w-0 p-5 lg:col-span-2">
           <div className="mb-3 flex items-center justify-between gap-2">
-            <h3 className="font-bold">extraction_review_bundle</h3>
-            <CopyButton text={prettyJson(extractionReviewCopyPayload)} />
+            <h3 className="font-bold">一括コピー用JSON: extraction_review_bundle</h3>
+            <CopyButton text={prettyJson(extractionReviewCopyPayload)} label="一括コピー" copiedLabel="一括コピー済み" />
           </div>
           <JsonBlock value={extractionReviewCopyPayload} />
         </Card>
