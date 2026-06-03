@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import { ClipboardCopy, ExternalLink, Loader2, Play, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { ClipboardCopy, ExternalLink, Loader2, Play, Plus, RefreshCw, Save, Trash2, Wand2 } from "lucide-react";
 import { apiUrl } from "@/api/client";
 import {
   getGptExtractionBenchmarkCandidate,
   runGptExtractionBenchmark,
+  saveTrainingDatasetGroundTruth,
   type TrainingCandidateBenchmarkCandidateDetailResponse,
   type TrainingCandidateBenchmarkRead,
 } from "@/api/admin-ocr";
@@ -87,6 +88,108 @@ function sessionCounts(value: unknown) {
     performance: rows.filter((item) => item.type === "performance").length,
     meetAndGreet: rows.filter((item) => item.type === "meet_and_greet").length,
     total: rows.length,
+  };
+}
+
+function cloneRecord(value: unknown): JsonRecord {
+  try {
+    return JSON.parse(JSON.stringify(asRecord(value)));
+  } catch {
+    return { ...asRecord(value) };
+  }
+}
+
+function editableGroupRows(value: unknown): JsonRecord[] {
+  return asArray(value).map((item) => {
+    if (typeof item === "string") return { group_name: item, score: null, match_method: null };
+    const record = cloneRecord(item);
+    const groupName = record.group_name ?? record.name ?? record.raw_name ?? "";
+    return {
+      ...record,
+      group_name: String(groupName),
+      score: record.score ?? null,
+      match_method: record.match_method ?? null,
+    };
+  });
+}
+
+function editableSessionRows(value: unknown): JsonRecord[] {
+  return asArray(value).map((item) => {
+    const record = cloneRecord(item);
+    return {
+      ...record,
+      session_type: String(record.session_type ?? "performance"),
+        group_name: String(record.group_name ?? record.performer_name ?? ""),
+        title: String(record.title ?? ""),
+        venue_name: String(record.venue_name ?? ""),
+        stage_name: String(record.stage_name ?? record.venue_name ?? record.booth_name ?? ""),
+      start_time: String(record.start_time ?? ""),
+      end_time: String(record.end_time ?? ""),
+      note: String(record.note ?? ""),
+    };
+  });
+}
+
+function normalizeGroundTruthDraft(value: unknown): JsonRecord {
+  const source = cloneRecord(value);
+  return {
+    ...source,
+    event_name: source.event_name ?? null,
+    event_date: source.event_date ?? null,
+    venue_name: source.venue_name ?? null,
+    open_time: source.open_time ?? null,
+    start_time: source.start_time ?? null,
+    source_type: source.source_type ?? null,
+    group_candidates: editableGroupRows(source.group_candidates),
+    sessions: editableSessionRows(source.sessions),
+  };
+}
+
+function cleanText(value: unknown): string | null {
+  const text = String(value ?? "").trim();
+  return text || null;
+}
+
+function buildGroundTruthPayloadFromDraft(draft: JsonRecord): JsonRecord {
+  const eventName = cleanText(draft.event_name);
+  const eventDate = cleanText(draft.event_date);
+  const venueName = cleanText(draft.venue_name);
+  const openTime = cleanText(draft.open_time);
+  const startTime = cleanText(draft.start_time);
+  const sourceType = cleanText(draft.source_type);
+  const groupCandidates = editableGroupRows(draft.group_candidates)
+    .map((group) => ({
+      ...group,
+      group_name: cleanText(group.group_name),
+      score: group.score === "" ? null : group.score ?? null,
+      match_method: cleanText(group.match_method),
+    }))
+    .filter((group) => group.group_name);
+  const sessions = editableSessionRows(draft.sessions)
+    .map((session) => ({
+      ...session,
+      session_type: cleanText(session.session_type) ?? "performance",
+      group_name: cleanText(session.group_name),
+      title: cleanText(session.title),
+      venue_name: cleanText(session.venue_name),
+      stage_name: cleanText(session.stage_name),
+      start_time: cleanText(session.start_time),
+      end_time: cleanText(session.end_time),
+      note: cleanText(session.note),
+    }))
+    .filter((session) => session.group_name || session.title || session.start_time || session.end_time);
+
+  return {
+    ...draft,
+    event_name: eventName,
+    event_date: eventDate,
+    venue_name: venueName,
+    open_time: openTime,
+    start_time: startTime,
+    source_type: sourceType,
+    venues: venueName || openTime || startTime ? [{ venue_name: venueName, open_time: openTime, start_time: startTime, note: null }] : [],
+    group_candidates: groupCandidates,
+    sessions,
   };
 }
 
@@ -241,6 +344,254 @@ function SessionTable({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+function GroundTruthEditor({
+  draft,
+  setDraft,
+  onDirty,
+  onCopyGpt,
+  onCopyCurrent,
+  onSave,
+  saving,
+  dirty,
+  hasGpt,
+}: {
+  draft: JsonRecord;
+  setDraft: Dispatch<SetStateAction<JsonRecord>>;
+  onDirty: () => void;
+  onCopyGpt: () => void;
+  onCopyCurrent: () => void;
+  onSave: () => void;
+  saving: boolean;
+  dirty: boolean;
+  hasGpt: boolean;
+}) {
+  const groups = editableGroupRows(draft.group_candidates);
+  const sessions = editableSessionRows(draft.sessions);
+
+  function updateField(field: string, value: string) {
+    onDirty();
+    setDraft((prev) => ({ ...prev, [field]: value }));
+  }
+
+  function updateGroup(index: number, field: string, value: string) {
+    onDirty();
+    setDraft((prev) => {
+      const nextGroups = editableGroupRows(prev.group_candidates);
+      nextGroups[index] = { ...nextGroups[index], [field]: value };
+      return { ...prev, group_candidates: nextGroups };
+    });
+  }
+
+  function addGroup() {
+    onDirty();
+    setDraft((prev) => ({ ...prev, group_candidates: [...editableGroupRows(prev.group_candidates), { group_name: "", score: null, match_method: "manual" }] }));
+  }
+
+  function removeGroup(index: number) {
+    onDirty();
+    setDraft((prev) => ({ ...prev, group_candidates: editableGroupRows(prev.group_candidates).filter((_, itemIndex) => itemIndex !== index) }));
+  }
+
+  function updateSession(index: number, field: string, value: string) {
+    onDirty();
+    setDraft((prev) => {
+      const nextSessions = editableSessionRows(prev.sessions);
+      nextSessions[index] = { ...nextSessions[index], [field]: value };
+      return { ...prev, sessions: nextSessions };
+    });
+  }
+
+  function addSession() {
+    onDirty();
+    setDraft((prev) => ({
+      ...prev,
+      sessions: [
+        ...editableSessionRows(prev.sessions),
+        { session_type: "performance", group_name: "", title: "", venue_name: "", stage_name: "", start_time: "", end_time: "", note: "" },
+      ],
+    }));
+  }
+
+  function removeSession(index: number) {
+    onDirty();
+    setDraft((prev) => ({ ...prev, sessions: editableSessionRows(prev.sessions).filter((_, itemIndex) => itemIndex !== index) }));
+  }
+
+  return (
+    <Card className="space-y-4 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-bold">Ground Truth Editor</h2>
+          <p className="mt-1 text-xs text-slate-500">GPT-5.4の結果をコピーして、保存前に表で修正できます。</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={onCopyCurrent}>
+            <ClipboardCopy className="h-4 w-4" />
+            Copy Current
+          </Button>
+          <Button type="button" variant="outline" onClick={onCopyGpt} disabled={!hasGpt}>
+            <Wand2 className="h-4 w-4" />
+            Copy GPT-5.4
+          </Button>
+          <Button type="button" onClick={onSave} disabled={saving}>
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {saving ? "Saving" : dirty ? "Save Ground Truth" : "Save Ground Truth"}
+          </Button>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto rounded-md border border-slate-200">
+        <table className="w-full min-w-[760px] text-left text-sm">
+          <thead className="bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500">
+            <tr>
+              <th className="px-3 py-2">Field</th>
+              <th className="px-3 py-2">Ground Truth</th>
+            </tr>
+          </thead>
+          <tbody>
+            {eventFields.map((field) => (
+              <tr key={field} className="border-t border-slate-100">
+                <td className="px-3 py-2 font-mono font-semibold">{field}</td>
+                <td className="px-3 py-2">
+                  <input
+                    value={String(draft[field] ?? "")}
+                    onChange={(event) => updateField(field, event.target.value)}
+                    className="h-9 w-full rounded-md border border-slate-200 px-3 text-sm"
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-bold">group_candidates</h3>
+          <Button type="button" variant="outline" onClick={addGroup}>
+            <Plus className="h-4 w-4" />
+            Add
+          </Button>
+        </div>
+        <div className="overflow-x-auto rounded-md border border-slate-200">
+          <table className="w-full min-w-[760px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500">
+              <tr>
+                <th className="px-3 py-2">Group</th>
+                <th className="px-3 py-2">Score</th>
+                <th className="px-3 py-2">Method</th>
+                <th className="w-12 px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map((group, index) => (
+                <tr key={`${index}-${group.group_name}`} className="border-t border-slate-100">
+                  <td className="px-3 py-2">
+                    <input
+                      value={String(group.group_name ?? "")}
+                      onChange={(event) => updateGroup(index, "group_name", event.target.value)}
+                      className="h-9 w-full rounded-md border border-slate-200 px-3 text-sm"
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      value={String(group.score ?? "")}
+                      onChange={(event) => updateGroup(index, "score", event.target.value)}
+                      className="h-9 w-28 rounded-md border border-slate-200 px-3 text-sm"
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      value={String(group.match_method ?? "")}
+                      onChange={(event) => updateGroup(index, "match_method", event.target.value)}
+                      className="h-9 w-full rounded-md border border-slate-200 px-3 text-sm"
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <button type="button" onClick={() => removeGroup(index)} className="grid h-9 w-9 place-items-center rounded-md border border-slate-200 text-slate-500 hover:text-red-700">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {groups.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-3 py-5 text-slate-500">
+                    なし
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-bold">sessions</h3>
+          <Button type="button" variant="outline" onClick={addSession}>
+            <Plus className="h-4 w-4" />
+            Add
+          </Button>
+        </div>
+        <div className="overflow-x-auto rounded-md border border-slate-200">
+          <table className="w-full min-w-[1120px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500">
+              <tr>
+                <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2">Start</th>
+                <th className="px-3 py-2">End</th>
+                <th className="px-3 py-2">Group</th>
+                <th className="px-3 py-2">Title</th>
+                <th className="px-3 py-2">Place</th>
+                <th className="px-3 py-2">Note</th>
+                <th className="w-12 px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sessions.map((session, index) => (
+                <tr key={`${index}-${session.group_name}-${session.start_time}`} className="border-t border-slate-100">
+                  <td className="px-3 py-2">
+                    <select
+                      value={String(session.session_type ?? "performance")}
+                      onChange={(event) => updateSession(index, "session_type", event.target.value)}
+                      className="h-9 w-40 rounded-md border border-slate-200 bg-white px-2 text-sm"
+                    >
+                      <option value="performance">performance</option>
+                      <option value="meet_and_greet">meet_and_greet</option>
+                    </select>
+                  </td>
+                  {(["start_time", "end_time", "group_name", "title", "stage_name", "note"] as const).map((field) => (
+                    <td key={field} className="px-3 py-2">
+                      <input
+                        value={String(session[field] ?? "")}
+                        onChange={(event) => updateSession(index, field, event.target.value)}
+                        className="h-9 w-full rounded-md border border-slate-200 px-3 text-sm"
+                      />
+                    </td>
+                  ))}
+                  <td className="px-3 py-2">
+                    <button type="button" onClick={() => removeSession(index)} className="grid h-9 w-9 place-items-center rounded-md border border-slate-200 text-slate-500 hover:text-red-700">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {sessions.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-3 py-5 text-slate-500">
+                    なし
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function GptExtractionBenchmarkDetailPage() {
   const params = useParams<{ candidateId: string }>();
   const candidateId = params.candidateId;
@@ -250,6 +601,9 @@ export default function GptExtractionBenchmarkDetailPage() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [groundTruthDraft, setGroundTruthDraft] = useState<JsonRecord>({});
+  const [groundTruthDirty, setGroundTruthDirty] = useState(false);
+  const [savingGroundTruth, setSavingGroundTruth] = useState(false);
 
   const latest: TrainingCandidateBenchmarkRead | null = detail?.latest_benchmark ?? detail?.benchmarks[0] ?? null;
   const currentPrediction = useMemo(
@@ -257,10 +611,11 @@ export default function GptExtractionBenchmarkDetailPage() {
     [latest, detail],
   );
   const gptPrediction = useMemo(() => asRecord(latest?.prediction_json), [latest]);
-  const groundTruth = useMemo(
+  const persistedGroundTruth = useMemo(
     () => asRecord(detail?.candidate.ground_truth_json ?? latest?.ground_truth_json),
     [detail, latest],
   );
+  const groundTruth = groundTruthDraft;
   const activeRun = ["pending", "running"].includes(latest?.status ?? "");
 
   async function load() {
@@ -282,6 +637,12 @@ export default function GptExtractionBenchmarkDetailPage() {
     }, 3500);
     return () => window.clearInterval(id);
   }, [activeRun, candidateId, model]);
+
+  useEffect(() => {
+    if (!detail || groundTruthDirty) return;
+    const source = Object.keys(persistedGroundTruth).length ? persistedGroundTruth : currentPrediction;
+    setGroundTruthDraft(normalizeGroundTruthDraft(source));
+  }, [detail, persistedGroundTruth, currentPrediction, groundTruthDirty]);
 
   async function handleReload() {
     setLoading(true);
@@ -307,6 +668,59 @@ export default function GptExtractionBenchmarkDetailPage() {
       setError(err instanceof Error ? err.message : "Run GPTに失敗しました");
     } finally {
       setRunning(false);
+    }
+  }
+
+  function markGroundTruthDirty() {
+    setGroundTruthDirty(true);
+  }
+
+  function replaceGroundTruthDraft(source: JsonRecord, label: string) {
+    setError(null);
+    setMessage(`${label}をGround Truth下書きにコピーしました`);
+    setGroundTruthDirty(true);
+    setGroundTruthDraft(
+      normalizeGroundTruthDraft({
+        ...source,
+        correct_item_source_types:
+          groundTruthDraft.correct_item_source_types ?? persistedGroundTruth.correct_item_source_types ?? currentPrediction.correct_item_source_types,
+      }),
+    );
+  }
+
+  async function handleSaveGroundTruth() {
+    if (!detail) return;
+    setSavingGroundTruth(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const payload = buildGroundTruthPayloadFromDraft(groundTruthDraft);
+      const saved = await saveTrainingDatasetGroundTruth(detail.candidate.id, {
+        ground_truth_json: payload,
+        reviewer: "gpt-extraction-benchmark",
+        review_status: "ground_truth_saved",
+        gpt_metrics: latest
+          ? {
+              benchmark_id: latest.id,
+              benchmark_model: latest.benchmark_model,
+              benchmark_type: latest.benchmark_type,
+              benchmark_status: latest.status,
+              input_tokens: latest.input_tokens,
+              output_tokens: latest.output_tokens,
+              total_tokens: latest.total_tokens,
+              latency_ms: latest.latency_ms,
+            }
+          : null,
+        note: "Saved from GPT Extraction Benchmark",
+      });
+      setDetail((prev) => (prev ? { ...prev, candidate: { ...prev.candidate, ...saved } } : prev));
+      setGroundTruthDraft(normalizeGroundTruthDraft(saved.ground_truth_json ?? payload));
+      setGroundTruthDirty(false);
+      setMessage("Ground Truthを保存しました");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ground Truthの保存に失敗しました");
+    } finally {
+      setSavingGroundTruth(false);
     }
   }
 
@@ -424,6 +838,18 @@ export default function GptExtractionBenchmarkDetailPage() {
           <JsonBlock value={gptPrediction} />
         </Card>
       </div>
+
+      <GroundTruthEditor
+        draft={groundTruthDraft}
+        setDraft={setGroundTruthDraft}
+        onDirty={markGroundTruthDirty}
+        onCopyCurrent={() => replaceGroundTruthDraft(currentPrediction, "Current Prediction")}
+        onCopyGpt={() => replaceGroundTruthDraft(gptPrediction, "GPT-5.4 Result")}
+        onSave={handleSaveGroundTruth}
+        saving={savingGroundTruth}
+        dirty={groundTruthDirty}
+        hasGpt={Object.keys(gptPrediction).length > 0}
+      />
 
       <EventDiffTable current={currentPrediction} gpt={gptPrediction} groundTruth={groundTruth} />
 
