@@ -1060,3 +1060,7 @@ export function runTrainingDatasetGptReview(candidateId: string) {
     method: "POST",
   });
 }
+
+export function getTrainingDatasetGptReview(reviewId: string) {
+  return apiFetch<TrainingCandidateGptReviewRead>(`/admin/training-dataset/candidates/gpt-reviews/${reviewId}`);
+}
