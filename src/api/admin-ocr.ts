@@ -452,6 +452,68 @@ export interface TrainingCandidateBenchmarkRunListResponse {
   items: TrainingCandidateBenchmarkRunRead[];
 }
 
+export interface TrainingCandidateBenchmarkRead {
+  id: string;
+  candidate_id: string;
+  benchmark_type: string;
+  benchmark_model: string;
+  benchmark_version: string;
+  status: "pending" | "running" | "completed" | "failed" | string;
+  rq_job_id: string | null;
+  input_payload_json: Record<string, unknown>;
+  current_prediction_json: Record<string, unknown>;
+  prediction_json: Record<string, unknown>;
+  ground_truth_json: Record<string, unknown> | null;
+  metrics_json: Record<string, unknown> | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  latency_ms: number | null;
+  estimated_cost_usd: number | null;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrainingCandidateBenchmarkCandidateItem {
+  candidate: TrainingEventCandidateRead;
+  image_asset_ids: string[];
+  latest_benchmark: TrainingCandidateBenchmarkRead | null;
+}
+
+export interface TrainingCandidateBenchmarkCandidateListResponse {
+  items: TrainingCandidateBenchmarkCandidateItem[];
+}
+
+export interface TrainingCandidateBenchmarkCandidateDetailResponse extends TrainingCandidateBenchmarkCandidateItem {
+  benchmarks: TrainingCandidateBenchmarkRead[];
+}
+
+export interface TrainingCandidateBenchmarkRunAllResponse {
+  created: TrainingCandidateBenchmarkRead[];
+  created_count: number;
+  skipped_candidate_ids: string[];
+}
+
+export interface TrainingCandidateBenchmarkStats {
+  benchmark_type: string;
+  benchmark_model: string | null;
+  total: number;
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+  comparison: Record<string, {
+    total?: number;
+    current_correct?: number;
+    gpt_correct?: number;
+    current_accuracy?: number | null;
+    gpt_accuracy?: number | null;
+  }>;
+}
+
 export interface TrainingDatasetCandidateListResponse {
   items: TrainingEventCandidateRead[];
 }
@@ -1077,6 +1139,69 @@ export function getTrainingDatasetBenchmarkJob(jobId: string) {
 
 export function listTrainingDatasetBenchmarkRuns(candidateId: string) {
   return apiFetch<TrainingCandidateBenchmarkRunListResponse>(`/admin/training-dataset/${candidateId}/benchmark-runs`);
+}
+
+export function getGptExtractionBenchmarkStats(options: { benchmarkModel?: string | null } = {}) {
+  return apiFetch<TrainingCandidateBenchmarkStats>("/admin/labs/gpt-extraction-benchmark/stats", {
+    query: {
+      benchmark_type: "image_direct",
+      benchmark_model: options.benchmarkModel,
+    },
+  });
+}
+
+export function listGptExtractionBenchmarkCandidates(options: {
+  limit?: number;
+  reviewStatus?: string | null;
+  benchmarkModel?: string | null;
+} = {}) {
+  return apiFetch<TrainingCandidateBenchmarkCandidateListResponse>("/admin/labs/gpt-extraction-benchmark/candidates", {
+    query: {
+      limit: options.limit ?? 50,
+      review_status: options.reviewStatus,
+      benchmark_type: "image_direct",
+      benchmark_model: options.benchmarkModel,
+    },
+  });
+}
+
+export function getGptExtractionBenchmarkCandidate(candidateId: string, options: { benchmarkModel?: string | null } = {}) {
+  return apiFetch<TrainingCandidateBenchmarkCandidateDetailResponse>(`/admin/labs/gpt-extraction-benchmark/candidates/${candidateId}`, {
+    query: {
+      benchmark_type: "image_direct",
+      benchmark_model: options.benchmarkModel,
+    },
+  });
+}
+
+export function runGptExtractionBenchmark(candidateId: string, payload: { benchmark_model?: string | null } = {}) {
+  return apiFetch<TrainingCandidateBenchmarkRead>(`/admin/labs/gpt-extraction-benchmark/candidates/${candidateId}/runs`, {
+    method: "POST",
+    body: JSON.stringify({
+      benchmark_type: "image_direct",
+      benchmark_model: payload.benchmark_model ?? null,
+    }),
+  });
+}
+
+export function runAllPendingGptExtractionBenchmarks(payload: {
+  benchmark_model?: string | null;
+  review_status?: string | null;
+  limit?: number;
+} = {}) {
+  return apiFetch<TrainingCandidateBenchmarkRunAllResponse>("/admin/labs/gpt-extraction-benchmark/run-all-pending", {
+    method: "POST",
+    body: JSON.stringify({
+      benchmark_type: "image_direct",
+      benchmark_model: payload.benchmark_model ?? null,
+      review_status: payload.review_status ?? "pending",
+      limit: payload.limit ?? 50,
+    }),
+  });
+}
+
+export function getGptExtractionBenchmarkRun(benchmarkId: string) {
+  return apiFetch<TrainingCandidateBenchmarkRead>(`/admin/labs/gpt-extraction-benchmark/runs/${benchmarkId}`);
 }
 
 export function runTrainingDatasetGptReview(candidateId: string) {

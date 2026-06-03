@@ -46,6 +46,7 @@ const adminNavSections = [
   {
     label: "Labs",
     items: [
+      { href: "/admin/labs/gpt-extraction-benchmark", label: "GPT Extraction", icon: FlaskConical },
       { href: "/admin/ocr-evaluation", label: "OCR Evaluation", icon: FlaskConical, exact: true },
       { href: "/admin/vision-structure-test", label: "Vision Structure", icon: FlaskConical, exact: true },
       { href: "/admin/ndlocr-qwen-benchmark", label: "NDLOCR Qwen PoC", icon: FlaskConical, exact: true },
