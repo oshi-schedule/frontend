@@ -337,8 +337,12 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function approvedText(value: unknown): string {
-  return value === true ? "修正不要" : "修正提案あり";
+function issueStatusText(issueCount: number): string {
+  return issueCount > 0 ? "修正提案あり" : "修正提案なし";
+}
+
+function issueStatusClass(issueCount: number): string {
+  return issueCount > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
 }
 
 function getGptSection(review: TrainingCandidateGptReviewRead | null, key: string): Record<string, unknown> {
@@ -428,18 +432,19 @@ function GptReviewerResult({ review }: { review: TrainingCandidateGptReviewRead 
   const approved = result.approved === true;
   const isWorking = review.status === "queued" || review.status === "running";
   const extractionIssues = getGptIssuesForSection(review, "extraction_review");
+  const venueIssues = getGptIssuesForSection(review, "venues_review");
+  const groupIssues = getGptIssuesForSection(review, "group_candidates_review");
+  const sessionIssues = getGptIssuesForSection(review, "sessions_review");
+  const totalIssues = extractionIssues.length + venueIssues.length + groupIssues.length + sessionIssues.length;
   const hasReviewPayload =
-    extractionIssues.length > 0 ||
-    asArray(venues.issues).length > 0 ||
-    asArray(groups.issues).length > 0 ||
-    asArray(sessions.issues).length > 0 ||
+    totalIssues > 0 ||
     Boolean(groups.count_comment || groups.content_comment || sessions.count_comment || sessions.content_comment);
   return (
-    <Card className={`min-w-0 space-y-4 p-5 ${approved ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+    <Card className={`min-w-0 space-y-4 p-5 ${!isWorking && approved ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">GPT Reviewer</p>
-          <h2 className="mt-1 font-bold text-slate-950">{approved ? "修正不要" : "GPT修正レビュー結果"}</h2>
+          <h2 className="mt-1 font-bold text-slate-950">{!isWorking && totalIssues === 0 ? "修正不要" : "GPT修正レビュー結果"}</h2>
           <p className="mt-1 text-sm text-slate-700">{String(result.summary ?? "-")}</p>
           <p className="mt-2 font-mono text-xs text-slate-500">
             {review.status} / {review.review_model} / {review.review_prompt_version} / {review.latency_ms ?? "-"}ms / {review.total_tokens ?? "-"} tokens
@@ -465,16 +470,16 @@ function GptReviewerResult({ review }: { review: TrainingCandidateGptReviewRead 
       ) : null}
       <div className="grid gap-3 text-xs text-slate-600 md:grid-cols-4">
         <p className="rounded-xl bg-white p-3">Event issues {extractionIssues.length}</p>
-        <p className="rounded-xl bg-white p-3">Venue issues {asArray(venues.issues).length}</p>
-        <p className="rounded-xl bg-white p-3">Group issues {asArray(groups.issues).length}</p>
-        <p className="rounded-xl bg-white p-3">Session issues {asArray(sessions.issues).length}</p>
+        <p className="rounded-xl bg-white p-3">Venue issues {venueIssues.length}</p>
+        <p className="rounded-xl bg-white p-3">Group issues {groupIssues.length}</p>
+        <p className="rounded-xl bg-white p-3">Session issues {sessionIssues.length}</p>
       </div>
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="rounded-2xl border border-white/70 bg-white p-4">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h3 className="font-bold">Event Info</h3>
-            <span className={`rounded-full px-3 py-1 text-xs font-bold ${extraction.approved === true ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-              {approvedText(extraction.approved)}
+            <span className={`rounded-full px-3 py-1 text-xs font-bold ${issueStatusClass(extractionIssues.length)}`}>
+              {issueStatusText(extractionIssues.length)}
             </span>
           </div>
           {extractionIssues.length ? (
@@ -500,10 +505,10 @@ function GptReviewerResult({ review }: { review: TrainingCandidateGptReviewRead 
             <h3 className="font-bold">Venues</h3>
             <CopyButton text={prettyJson(venues.issues ?? [])} label="issuesコピー" copiedLabel="コピー済み" />
           </div>
-          <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${venues.approved === true ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-            {approvedText(venues.approved)}
+          <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${issueStatusClass(venueIssues.length)}`}>
+            {issueStatusText(venueIssues.length)}
           </p>
-          <GptIssuesList issues={venues.issues} approved={venues.approved} />
+          <GptIssuesList issues={venueIssues} approved={venueIssues.length === 0} />
         </div>
 
         <div className="rounded-2xl border border-white/70 bg-white p-4">
@@ -511,14 +516,14 @@ function GptReviewerResult({ review }: { review: TrainingCandidateGptReviewRead 
             <h3 className="font-bold">Group Candidates</h3>
             <CopyButton text={prettyJson(groups.issues ?? [])} label="issuesコピー" copiedLabel="コピー済み" />
           </div>
-          <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${groups.approved === true ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-            {approvedText(groups.approved)}
+          <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${issueStatusClass(groupIssues.length)}`}>
+            {issueStatusText(groupIssues.length)}
           </p>
           <div className="mt-3">
             <ReviewCommentBlock title="groups" countComment={groups.count_comment} contentComment={groups.content_comment} />
           </div>
           <div className="mt-3">
-            <GptIssuesList issues={groups.issues} approved={groups.approved} />
+            <GptIssuesList issues={groupIssues} approved={groupIssues.length === 0} />
           </div>
           <div className="mt-3">
             <JsonBlock value={{ count_comment: groups.count_comment ?? "", content_comment: groups.content_comment ?? "", issues: groups.issues ?? [] }} />
@@ -530,13 +535,13 @@ function GptReviewerResult({ review }: { review: TrainingCandidateGptReviewRead 
             <h3 className="font-bold">Sessions</h3>
             <CopyButton text={prettyJson(sessions.issues ?? [])} label="issuesコピー" copiedLabel="コピー済み" />
           </div>
-          <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${sessions.approved === true ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-            {approvedText(sessions.approved)}
+          <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${issueStatusClass(sessionIssues.length)}`}>
+            {issueStatusText(sessionIssues.length)}
           </p>
-          <p className="mb-3 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">issues {asArray(sessions.issues).length}</p>
+          <p className="mb-3 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">issues {sessionIssues.length}</p>
           <ReviewCommentBlock title="sessions" countComment={sessions.count_comment} contentComment={sessions.content_comment} />
           <div className="mt-3">
-            <GptIssuesList issues={sessions.issues} approved={sessions.approved} />
+            <GptIssuesList issues={sessionIssues} approved={sessionIssues.length === 0} />
           </div>
           <div className="mt-3">
             <JsonBlock value={{ count_comment: sessions.count_comment ?? "", content_comment: sessions.content_comment ?? "", issues: sessions.issues ?? [] }} />
