@@ -345,43 +345,16 @@ function getGptSection(review: TrainingCandidateGptReviewRead | null, key: strin
   return asRecord(asRecord(review?.review_result_json)[key]);
 }
 
-function getGptCorrectedExtraction(review: TrainingCandidateGptReviewRead | null): Record<string, unknown> {
-  return asRecord(getGptSection(review, "extraction_review").corrected_json);
+function getGptIssuesForSection(review: TrainingCandidateGptReviewRead | null, key: string): Record<string, unknown>[] {
+  const section = getGptSection(review, key);
+  const issues = asArray(section.issues).map(asRecord);
+  if (issues.length) return issues;
+  return asArray(section.suggestions).map(asRecord);
 }
 
 function getGptSuggestedField(review: TrainingCandidateGptReviewRead | null, field: string): unknown {
-  const corrected = getGptCorrectedExtraction(review);
-  if (field in corrected) return corrected[field];
-  const suggestions = asArray(getGptSection(review, "extraction_review").suggestions).map(asRecord);
-  return suggestions.find((item) => item.field === field)?.suggested;
-}
-
-function getGptSuggestedVenues(review: TrainingCandidateGptReviewRead | null): VenueDraft[] | null {
-  const venuesReview = getGptSection(review, "venues_review");
-  if (Array.isArray(venuesReview.corrected_json)) {
-    const venues = normalizeVenues(venuesReview.corrected_json);
-    if (venues.length) return venues;
-  }
-  const extractionVenues = getGptCorrectedExtraction(review).venues;
-  if (Array.isArray(extractionVenues)) {
-    const venues = normalizeVenues(extractionVenues);
-    if (venues.length) return venues;
-  }
-  return null;
-}
-
-function getGptSuggestedGroups(review: TrainingCandidateGptReviewRead | null): GroupCandidateDraft[] | null {
-  const groupsReview = getGptSection(review, "group_candidates_review");
-  if (!Array.isArray(groupsReview.corrected_json)) return null;
-  const groups = normalizeGroupCandidates(groupsReview.corrected_json);
-  return groups.length ? groups : null;
-}
-
-function getGptSuggestedSessions(review: TrainingCandidateGptReviewRead | null): SessionDraft[] | null {
-  const sessionsReview = getGptSection(review, "sessions_review");
-  if (!Array.isArray(sessionsReview.corrected_json)) return null;
-  const sessions = normalizeSessions(sessionsReview.corrected_json);
-  return sessions.length ? sessions : null;
+  const issues = getGptIssuesForSection(review, "extraction_review");
+  return issues.find((item) => item.field === field)?.expected ?? issues.find((item) => item.field === field)?.suggested;
 }
 
 function InlineCompare({ label, prediction, gpt }: { label: string; prediction: unknown; gpt: unknown }) {
@@ -446,7 +419,7 @@ function GptIssuesList({ issues, approved }: { issues: unknown; approved: unknow
   );
 }
 
-function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptReviewRead; onApply: () => void }) {
+function GptReviewerResult({ review }: { review: TrainingCandidateGptReviewRead }) {
   const result = asRecord(review.review_result_json);
   const extraction = asRecord(result.extraction_review);
   const venues = asRecord(result.venues_review);
@@ -454,15 +427,12 @@ function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptRe
   const sessions = asRecord(result.sessions_review);
   const approved = result.approved === true;
   const isWorking = review.status === "queued" || review.status === "running";
-  const groupCorrectedCount = asArray(groups.corrected_json).length;
-  const sessionCorrectedCount = asArray(sessions.corrected_json).length;
+  const extractionIssues = getGptIssuesForSection(review, "extraction_review");
   const hasReviewPayload =
-    asArray(extraction.suggestions).length > 0 ||
-    asArray(venues.corrected_json).length > 0 ||
+    extractionIssues.length > 0 ||
+    asArray(venues.issues).length > 0 ||
     asArray(groups.issues).length > 0 ||
     asArray(sessions.issues).length > 0 ||
-    groupCorrectedCount > 0 ||
-    sessionCorrectedCount > 0 ||
     Boolean(groups.count_comment || groups.content_comment || sessions.count_comment || sessions.content_comment);
   return (
     <Card className={`min-w-0 space-y-4 p-5 ${approved ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
@@ -482,11 +452,6 @@ function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptRe
               レビュー実行中
             </span>
           ) : null}
-          {review.status === "completed" ? (
-            <Button type="button" variant="outline" onClick={onApply}>
-              GPT提案をフォームへ反映
-            </Button>
-          ) : null}
           <CopyButton text={prettyJson(review.review_result_json)} label="結果コピー" copiedLabel="コピー済み" />
         </div>
       </div>
@@ -495,12 +460,12 @@ function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptRe
       ) : null}
       {review.status === "completed" && !hasReviewPayload ? (
         <p className="rounded-xl border border-amber-200 bg-white p-3 text-sm font-semibold text-amber-700">
-          GPTの実行は完了していますが、修正提案・コメント・corrected_json が空です。画像入力またはプロンプト結果を確認した方がよさそうです。
+          GPTの実行は完了していますが、issues とコメントが空です。画像入力またはプロンプト結果を確認した方がよさそうです。
         </p>
       ) : null}
       <div className="grid gap-3 text-xs text-slate-600 md:grid-cols-4">
-        <p className="rounded-xl bg-white p-3">Event suggestions {asArray(extraction.suggestions).length}</p>
-        <p className="rounded-xl bg-white p-3">Venues corrected {asArray(venues.corrected_json).length}</p>
+        <p className="rounded-xl bg-white p-3">Event issues {extractionIssues.length}</p>
+        <p className="rounded-xl bg-white p-3">Venue issues {asArray(venues.issues).length}</p>
         <p className="rounded-xl bg-white p-3">Group issues {asArray(groups.issues).length}</p>
         <p className="rounded-xl bg-white p-3">Session issues {asArray(sessions.issues).length}</p>
       </div>
@@ -512,15 +477,14 @@ function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptRe
               {approvedText(extraction.approved)}
             </span>
           </div>
-          {asArray(extraction.suggestions).length ? (
+          {extractionIssues.length ? (
             <div className="space-y-2">
-              {asArray(extraction.suggestions).map((item, index) => {
-                const suggestion = asRecord(item);
+              {extractionIssues.map((suggestion, index) => {
                 return (
                   <div key={index} className="rounded-xl border border-slate-200 p-3 text-sm">
                     <p className="font-mono text-xs font-bold text-slate-500">{String(suggestion.field ?? "-")}</p>
                     <p className="mt-2 text-slate-600">current: {String(suggestion.current ?? "null")}</p>
-                    <p className="font-semibold text-slate-950">suggested: {String(suggestion.suggested ?? "null")}</p>
+                    <p className="font-semibold text-slate-950">expected: {String((suggestion.expected ?? suggestion.suggested) ?? "null")}</p>
                     <p className="mt-1 text-xs text-slate-500">{String(suggestion.reason ?? "")}</p>
                   </div>
                 );
@@ -534,28 +498,22 @@ function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptRe
         <div className="rounded-2xl border border-white/70 bg-white p-4">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h3 className="font-bold">Venues</h3>
-            <CopyButton text={prettyJson(venues.corrected_json ?? [])} label="corrected_json" copiedLabel="コピー済み" />
+            <CopyButton text={prettyJson(venues.issues ?? [])} label="issuesコピー" copiedLabel="コピー済み" />
           </div>
           <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${venues.approved === true ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
             {approvedText(venues.approved)}
           </p>
-          <p className="mb-3 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">issues {asArray(venues.issues).length}</p>
-          <JsonBlock value={{ issues: venues.issues ?? [], corrected_json: venues.corrected_json ?? [] }} />
+          <GptIssuesList issues={venues.issues} approved={venues.approved} />
         </div>
 
         <div className="rounded-2xl border border-white/70 bg-white p-4">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h3 className="font-bold">Group Candidates</h3>
-            <CopyButton text={prettyJson(groups.corrected_json ?? [])} label="corrected_json" copiedLabel="コピー済み" />
+            <CopyButton text={prettyJson(groups.issues ?? [])} label="issuesコピー" copiedLabel="コピー済み" />
           </div>
           <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${groups.approved === true ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
             {approvedText(groups.approved)}
           </p>
-          <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
-            <p className="rounded-lg bg-slate-50 p-2">add {asArray(groups.add).length}</p>
-            <p className="rounded-lg bg-slate-50 p-2">remove {asArray(groups.remove).length}</p>
-            <p className="rounded-lg bg-slate-50 p-2">replace {asArray(groups.replace).length}</p>
-          </div>
           <div className="mt-3">
             <ReviewCommentBlock title="groups" countComment={groups.count_comment} contentComment={groups.content_comment} />
           </div>
@@ -563,14 +521,14 @@ function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptRe
             <GptIssuesList issues={groups.issues} approved={groups.approved} />
           </div>
           <div className="mt-3">
-            <JsonBlock value={{ count_comment: groups.count_comment ?? "", content_comment: groups.content_comment ?? "", issues: groups.issues ?? [], add: groups.add ?? [], remove: groups.remove ?? [], replace: groups.replace ?? [], corrected_json: groups.corrected_json ?? [] }} />
+            <JsonBlock value={{ count_comment: groups.count_comment ?? "", content_comment: groups.content_comment ?? "", issues: groups.issues ?? [] }} />
           </div>
         </div>
 
         <div className="rounded-2xl border border-white/70 bg-white p-4">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h3 className="font-bold">Sessions</h3>
-            <CopyButton text={prettyJson(sessions.corrected_json ?? [])} label="corrected_json" copiedLabel="コピー済み" />
+            <CopyButton text={prettyJson(sessions.issues ?? [])} label="issuesコピー" copiedLabel="コピー済み" />
           </div>
           <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${sessions.approved === true ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
             {approvedText(sessions.approved)}
@@ -581,7 +539,7 @@ function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptRe
             <GptIssuesList issues={sessions.issues} approved={sessions.approved} />
           </div>
           <div className="mt-3">
-            <JsonBlock value={{ count_comment: sessions.count_comment ?? "", content_comment: sessions.content_comment ?? "", issues: sessions.issues ?? [], corrected_json: sessions.corrected_json ?? [] }} />
+            <JsonBlock value={{ count_comment: sessions.count_comment ?? "", content_comment: sessions.content_comment ?? "", issues: sessions.issues ?? [] }} />
           </div>
         </div>
       </div>
@@ -1082,66 +1040,6 @@ export default function TrainingDatasetReviewPage() {
     }
   }
 
-  function applyGptReviewToForm() {
-    if (!gptReview || gptReview.status !== "completed") return;
-    const result = asRecord(gptReview.review_result_json);
-    const extraction = asRecord(result.extraction_review);
-    const correctedExtraction = asRecord(extraction.corrected_json);
-    const suggestions = asArray(extraction.suggestions).map(asRecord);
-    const nextVenues = getGptSuggestedVenues(gptReview);
-    const nextGroups = getGptSuggestedGroups(gptReview);
-    const nextSessions = getGptSuggestedSessions(gptReview);
-    setForm((current) => {
-      const patch: Partial<GroundTruthForm> = {};
-      for (const field of ["event_name", "event_date"] as const) {
-        const fromCorrected = correctedExtraction[field];
-        const fromSuggestion = suggestions.find((item) => item.field === field)?.suggested;
-        const nextValue = fromCorrected ?? fromSuggestion;
-        if (typeof nextValue === "string") {
-          patch[field] = nextValue;
-        } else if (nextValue === null) {
-          patch[field] = "";
-        }
-      }
-      if (nextVenues) {
-        patch.venues = nextVenues;
-      }
-      if (nextGroups) {
-        patch.group_candidates = nextGroups;
-      }
-      if (nextSessions) {
-        patch.sessions = nextSessions;
-      }
-      return { ...current, ...patch };
-    });
-    if (nextGroups) setGroupJson(prettyJson(nextGroups));
-    if (nextSessions) setSessionJson(prettyJson(nextSessions));
-    setSaveMessage("GPT提案をフォームへ反映しました。内容を確認して保存してください。");
-  }
-
-  function applyGptVenuesToForm() {
-    const nextVenues = getGptSuggestedVenues(gptReview);
-    if (!nextVenues) return;
-    setForm((current) => ({ ...current, venues: nextVenues }));
-    setSaveMessage("GPTのvenues提案をフォームへ反映しました。");
-  }
-
-  function applyGptGroupsToForm() {
-    const nextGroups = getGptSuggestedGroups(gptReview);
-    if (!nextGroups) return;
-    setForm((current) => ({ ...current, group_candidates: nextGroups }));
-    setGroupJson(prettyJson(nextGroups));
-    setSaveMessage("GPTのgroup_candidates提案をフォームへ反映しました。");
-  }
-
-  function applyGptSessionsToForm() {
-    const nextSessions = getGptSuggestedSessions(gptReview);
-    if (!nextSessions) return;
-    setForm((current) => ({ ...current, sessions: nextSessions }));
-    setSessionJson(prettyJson(nextSessions));
-    setSaveMessage("GPTのsessions提案をフォームへ反映しました。");
-  }
-
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -1179,9 +1077,7 @@ export default function TrainingDatasetReviewPage() {
     open_time: candidate.prediction_json.open_time,
     start_time: candidate.prediction_json.start_time,
   });
-  const gptSuggestedVenues = getGptSuggestedVenues(gptReview);
-  const gptSuggestedGroups = getGptSuggestedGroups(gptReview);
-  const gptSuggestedSessions = getGptSuggestedSessions(gptReview);
+  const gptVenuesReview = getGptSection(gptReview, "venues_review");
   const gptGroupsReview = getGptSection(gptReview, "group_candidates_review");
   const gptSessionsReview = getGptSection(gptReview, "sessions_review");
 
@@ -1267,7 +1163,7 @@ export default function TrainingDatasetReviewPage() {
         {gptReviewError ? <p className="mt-2 rounded-xl bg-red-50 p-3 text-sm text-red-700">{gptReviewError}</p> : null}
       </Card>
 
-      {gptReview ? <GptReviewerResult review={gptReview} onApply={applyGptReviewToForm} /> : null}
+      {gptReview ? <GptReviewerResult review={gptReview} /> : null}
 
       <div className="space-y-5">
         <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.1fr)_minmax(0,1fr)]">
@@ -1624,13 +1520,8 @@ export default function TrainingDatasetReviewPage() {
                     <JsonBlock value={predictionVenues} />
                   </div>
                   <div className="rounded-xl bg-amber-50 p-3">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-amber-600">GPT venues proposal</p>
-                      <Button type="button" variant="outline" size="sm" onClick={applyGptVenuesToForm} disabled={!gptSuggestedVenues}>
-                        反映
-                      </Button>
-                    </div>
-                    <JsonBlock value={gptSuggestedVenues ?? []} />
+                    <p className="mb-2 text-xs font-bold uppercase tracking-[0.14em] text-amber-600">GPT venue issues</p>
+                    <GptIssuesList issues={gptVenuesReview.issues} approved={gptVenuesReview.approved} />
                   </div>
                 </div>
               </div>
@@ -1644,9 +1535,6 @@ export default function TrainingDatasetReviewPage() {
                 <p className="mt-1 text-sm text-slate-500">Ground Truthではグループ名を編集します。score / match_method は予測メタ情報として表示のみです。</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={applyGptGroupsToForm} disabled={!gptSuggestedGroups}>
-                  GPT JSONをフォームへ反映
-                </Button>
                 <Button type="button" variant="outline" onClick={addGroupCandidate}>
                   <Plus className="mr-2 h-4 w-4" />
                   グループ追加
@@ -1656,11 +1544,11 @@ export default function TrainingDatasetReviewPage() {
 
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">Prediction / Current / GPT count</p>
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">Prediction / Current / GPT Issues</p>
                 <div className="mt-2 grid gap-2 text-sm font-semibold text-slate-700 sm:grid-cols-3">
                   <p className="rounded-lg bg-white p-2">P {Array.isArray(candidate.prediction_json.group_candidates) ? candidate.prediction_json.group_candidates.length : 0}</p>
                   <p className="rounded-lg bg-white p-2">GT {form.group_candidates.length}</p>
-                  <p className="rounded-lg bg-white p-2">GPT {gptSuggestedGroups?.length ?? 0}</p>
+                  <p className="rounded-lg bg-white p-2">Issues {asArray(gptGroupsReview.issues).length}</p>
                 </div>
               </div>
               <ReviewCommentBlock title="groups" countComment={gptGroupsReview.count_comment} contentComment={gptGroupsReview.content_comment} />
@@ -1678,10 +1566,10 @@ export default function TrainingDatasetReviewPage() {
               </div>
               <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <h3 className="font-bold">GPT corrected_json</h3>
-                  <CopyButton text={prettyJson(gptSuggestedGroups ?? [])} />
+                  <h3 className="font-bold">GPT Issues</h3>
+                  <CopyButton text={prettyJson(gptGroupsReview.issues ?? [])} />
                 </div>
-                <JsonBlock value={gptSuggestedGroups ?? []} />
+                <JsonBlock value={gptGroupsReview.issues ?? []} />
               </div>
             </div>
 
@@ -1760,9 +1648,6 @@ export default function TrainingDatasetReviewPage() {
                 <p className="mt-1 text-sm text-slate-500">時間枠は「時刻 / 種別 / 出演者またはタイトル / 場所」で確認できるようにしています。</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={applyGptSessionsToForm} disabled={!gptSuggestedSessions}>
-                  GPT JSONをフォームへ反映
-                </Button>
                 <Button type="button" variant="outline" onClick={addSession}>
                   <Plus className="mr-2 h-4 w-4" />
                   Session追加
@@ -1772,11 +1657,11 @@ export default function TrainingDatasetReviewPage() {
 
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">Prediction / Current / GPT count</p>
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">Prediction / Current / GPT Issues</p>
                 <div className="mt-2 grid gap-2 text-sm font-semibold text-slate-700 sm:grid-cols-3">
                   <p className="rounded-lg bg-white p-2">P {Array.isArray(candidate.prediction_json.sessions) ? candidate.prediction_json.sessions.length : 0}</p>
                   <p className="rounded-lg bg-white p-2">GT {form.sessions.length}</p>
-                  <p className="rounded-lg bg-white p-2">GPT {gptSuggestedSessions?.length ?? 0}</p>
+                  <p className="rounded-lg bg-white p-2">Issues {asArray(gptSessionsReview.issues).length}</p>
                 </div>
               </div>
               <ReviewCommentBlock title="sessions" countComment={gptSessionsReview.count_comment} contentComment={gptSessionsReview.content_comment} />
@@ -1794,10 +1679,10 @@ export default function TrainingDatasetReviewPage() {
               </div>
               <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <h3 className="font-bold">GPT corrected_json</h3>
-                  <CopyButton text={prettyJson(gptSuggestedSessions ?? [])} />
+                  <h3 className="font-bold">GPT Issues</h3>
+                  <CopyButton text={prettyJson(gptSessionsReview.issues ?? [])} />
                 </div>
-                <JsonBlock value={gptSuggestedSessions ?? []} />
+                <JsonBlock value={gptSessionsReview.issues ?? []} />
               </div>
             </div>
 
