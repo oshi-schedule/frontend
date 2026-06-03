@@ -87,6 +87,10 @@ function sourceAssetImageUrl(assetId: string, download = false): string {
   return apiUrl(`/admin/source-assets/${assetId}/image`, download ? { download: 1 } : undefined);
 }
 
+function sourceAssetClipboardImageUrl(assetId: string): string {
+  return apiUrl(`/admin/source-assets/${assetId}/image/clipboard`);
+}
+
 function getAssetFilename(asset: unknown, index: number): string {
   return getStringField(asset, "filename") || `source_image_${index + 1}.jpg`;
 }
@@ -234,7 +238,7 @@ function CopyButton({ text, label = "Copy", copiedLabel = "Copied" }: { text: st
   );
 }
 
-async function copyImageToClipboard(imageUrl: string, fallbackLabel: string): Promise<{ ok: boolean; message: string }> {
+async function copyImageToClipboard(imageUrl: string, fallbackUrl: string, fallbackLabel: string): Promise<{ ok: boolean; message: string }> {
   if (!("clipboard" in navigator)) {
     return { ok: false, message: "このブラウザはクリップボードAPIをサポートしていません。" };
   }
@@ -249,14 +253,14 @@ async function copyImageToClipboard(imageUrl: string, fallbackLabel: string): Pr
       await navigator.clipboard.write([payload]);
       return { ok: true, message: "画像をコピーしました。" };
     }
-    await navigator.clipboard.writeText(imageUrl);
+    await navigator.clipboard.writeText(fallbackUrl);
     return { ok: true, message: `${fallbackLabel} をコピーしました。` };
   } catch {
     return { ok: false, message: "画像コピーに失敗しました。" };
   }
 }
 
-function CopyImageButton({ imageUrl, label, fallbackLabel }: { imageUrl: string; label: string; fallbackLabel: string }) {
+function CopyImageButton({ imageUrl, fallbackUrl, label, fallbackLabel }: { imageUrl: string; fallbackUrl: string; label: string; fallbackLabel: string }) {
   const [state, setState] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
 
@@ -264,7 +268,7 @@ function CopyImageButton({ imageUrl, label, fallbackLabel }: { imageUrl: string;
     if (state === "copying") return;
     setState("copying");
     setMessage(null);
-    const result = await copyImageToClipboard(imageUrl, fallbackLabel);
+    const result = await copyImageToClipboard(imageUrl, fallbackUrl, fallbackLabel);
     if (result.ok) {
       setState("copied");
       setTimeout(() => setState("idle"), 1200);
@@ -822,6 +826,7 @@ export default function TrainingDatasetReviewPage() {
                   const assetId = getSourceAssetId(asset);
                   const assetRecord = asset && typeof asset === "object" ? (asset as Record<string, unknown>) : {};
                   const imageUrl = assetId ? sourceAssetImageUrl(assetId) : "";
+                  const clipboardImageUrl = assetId ? sourceAssetClipboardImageUrl(assetId) : "";
                   const downloadUrl = assetId ? sourceAssetImageUrl(assetId, true) : "";
                   const filename = getAssetFilename(asset, index);
                   return assetId ? (
@@ -844,7 +849,8 @@ export default function TrainingDatasetReviewPage() {
                       </p>
                       <div className="mt-2 flex items-center gap-2 text-[11px] font-bold">
                         <CopyImageButton
-                          imageUrl={imageUrl}
+                          imageUrl={clipboardImageUrl}
+                          fallbackUrl={imageUrl}
                           label="画像コピー"
                           fallbackLabel={`${filename} URLコピー`}
                         />
@@ -1480,7 +1486,8 @@ export default function TrainingDatasetReviewPage() {
               </p>
                 <div className="flex items-center gap-2">
                   <CopyImageButton
-                    imageUrl={currentImageUrl}
+                    imageUrl={currentImageAssetId ? sourceAssetClipboardImageUrl(currentImageAssetId) : currentImageUrl}
+                    fallbackUrl={currentImageUrl}
                     label="画像コピー"
                     fallbackLabel={`${currentImageFilename} URLコピー`}
                   />
