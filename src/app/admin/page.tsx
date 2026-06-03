@@ -57,6 +57,7 @@ const quickMenuSections = [
     items: [
       { href: "/admin/ocr-evaluation", label: "OCR Evaluation Lab", desc: "100枚までのSourceKind / LayoutGraph一括評価" },
       { href: "/admin/vision-structure-test", label: "Vision Structure Test", desc: "GPT Visionのcontainer / session構造を観測して保存" },
+      { href: "/admin/ndlocr-qwen-benchmark", label: "NDLOCR Qwen PoC", desc: "Vast.ai上のNDLOCR ver2 + qwen3:4bで単発Event Candidate抽出を検証" },
     ],
   },
 ];
