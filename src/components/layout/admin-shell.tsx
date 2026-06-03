@@ -13,6 +13,7 @@ import {
   FileText,
   FlaskConical,
   GitMerge,
+  KeyRound,
   LayoutDashboard,
   ScanSearch,
   Users,
@@ -36,6 +37,7 @@ const adminNavSections = [
     items: [
       { href: "/admin/training-dataset", label: "Labeling Upload", icon: DatabaseZap },
       { href: "/admin/candidate-queue", label: "Candidate Queue", icon: ClipboardList, exact: true },
+      { href: "/admin/contributors", label: "Contributors", icon: KeyRound, exact: true },
       { href: "/admin/event-candidate-reviews", label: "Labeling Analytics", icon: BarChart3, exact: true },
       { href: "/admin/event-candidate-review", label: "Draft Review", icon: ClipboardCheck, exact: true },
       { href: "/admin/ocr-test", label: "OCR Draft Upload", icon: ScanSearch, exact: true },

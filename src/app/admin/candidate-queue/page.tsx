@@ -83,7 +83,7 @@ function CandidateRow({ candidate }: { candidate: TrainingEventCandidateRead }) 
   const input = candidate.input_payload_json ?? {};
   const prediction = candidate.prediction_json ?? {};
   const fileCount = asNumber(input.file_count) ?? (countArray(input.assets) || countArray(input.filenames));
-  const contributor = asString(input.contributor_name) || "unknown";
+  const contributor = candidate.contributor_name || asString(input.contributor_name) || "unknown";
   const route = candidate.processing_route || asString(input.processing_route) || asString(input.selected_route) || "-";
   const sourceHint = candidate.source_type_hint || asString(input.source_type_hint) || "-";
   const predicted = candidate.predicted_source_type || candidate.source_type || asString(input.predicted_source_type) || "-";
@@ -180,6 +180,7 @@ export default function CandidateQueuePage() {
         candidate.source_type,
         candidate.source_type_hint,
         candidate.predicted_source_type,
+        candidate.contributor_name,
         asString(candidate.input_payload_json?.contributor_name),
         asString(candidate.input_payload_json?.processing_route),
       ]

@@ -319,6 +319,9 @@ export interface TrainingEventCandidateRead {
   job_id: string;
   source_id: string | null;
   upload_session_id: string | null;
+  contributor_id?: string | null;
+  contributor_name?: string | null;
+  contributor_role?: string | null;
   source_type: string | null;
   source_type_hint?: string | null;
   predicted_source_type?: string | null;
@@ -410,6 +413,26 @@ export interface TrainingCandidateBenchmarkRunListResponse {
 
 export interface TrainingDatasetCandidateListResponse {
   items: TrainingEventCandidateRead[];
+}
+
+export interface ContributorTokenRead {
+  id: string;
+  contributor_name: string;
+  role: string;
+  is_active: boolean;
+  upload_count: number;
+  created_at: string;
+  updated_at: string;
+  last_used_at: string | null;
+}
+
+export interface ContributorTokenCreateResponse {
+  contributor: ContributorTokenRead;
+  token: string;
+}
+
+export interface ContributorTokenListResponse {
+  items: ContributorTokenRead[];
 }
 
 export interface TrainingDatasetStats {
@@ -956,6 +979,24 @@ export function listTrainingDatasetCandidates(options: { limit?: number; review_
 
 export function getTrainingDatasetStats() {
   return apiFetch<TrainingDatasetStats>("/admin/training-dataset/stats");
+}
+
+export function listContributorTokens() {
+  return apiFetch<ContributorTokenListResponse>("/admin/contributor-tokens");
+}
+
+export function createContributorToken(payload: { contributor_name: string; role?: string }) {
+  return apiFetch<ContributorTokenCreateResponse>("/admin/contributor-tokens", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateContributorToken(contributorId: string, payload: { is_active: boolean }) {
+  return apiFetch<ContributorTokenRead>(`/admin/contributor-tokens/${contributorId}`, {
+    method: "PATCH",
+    query: { is_active: payload.is_active ? 1 : 0 },
+  });
 }
 
 export function getTrainingDatasetCandidate(candidateId: string) {
