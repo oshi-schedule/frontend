@@ -23,6 +23,16 @@ const statusOptions = [
   { value: "rejected", label: "Rejected" },
 ];
 
+const benchmarkStatusOptions = [
+  { value: "", label: "All" },
+  { value: "not_run", label: "Not Run" },
+  { value: "has_run", label: "Has Run" },
+  { value: "pending", label: "Pending" },
+  { value: "running", label: "Running" },
+  { value: "completed", label: "Completed" },
+  { value: "failed", label: "Failed" },
+];
+
 function sourceAssetImageUrl(assetId: string) {
   return apiUrl(`/admin/source-assets/${assetId}/image`);
 }
@@ -49,6 +59,7 @@ export default function GptExtractionBenchmarkPage() {
   const [items, setItems] = useState<TrainingCandidateBenchmarkCandidateItem[]>([]);
   const [stats, setStats] = useState<TrainingCandidateBenchmarkStats | null>(null);
   const [reviewStatus, setReviewStatus] = useState("pending");
+  const [benchmarkStatus, setBenchmarkStatus] = useState("");
   const [model, setModel] = useState("gpt-5.4");
   const [limit, setLimit] = useState(50);
   const [loading, setLoading] = useState(true);
@@ -69,6 +80,7 @@ export default function GptExtractionBenchmarkPage() {
       listGptExtractionBenchmarkCandidates({
         limit,
         reviewStatus: reviewStatus || null,
+        benchmarkStatus: benchmarkStatus || null,
         benchmarkModel,
       }),
       getGptExtractionBenchmarkStats({ benchmarkModel }),
@@ -82,7 +94,7 @@ export default function GptExtractionBenchmarkPage() {
     load()
       .catch((err) => setError(err instanceof Error ? err.message : "読み込みに失敗しました"))
       .finally(() => setLoading(false));
-  }, []);
+  }, [reviewStatus, benchmarkStatus, model, limit]);
 
   useEffect(() => {
     if (!hasActiveRuns) return;
@@ -90,7 +102,7 @@ export default function GptExtractionBenchmarkPage() {
       load().catch(() => undefined);
     }, 4000);
     return () => window.clearInterval(id);
-  }, [hasActiveRuns, model, reviewStatus, limit]);
+  }, [hasActiveRuns, model, reviewStatus, benchmarkStatus, limit]);
 
   async function handleReload() {
     setLoading(true);
@@ -149,7 +161,7 @@ export default function GptExtractionBenchmarkPage() {
       />
 
       <Card className="space-y-4 p-5">
-        <div className="grid gap-3 lg:grid-cols-[160px_180px_1fr_auto] lg:items-end">
+        <div className="grid gap-3 lg:grid-cols-[160px_160px_160px_1fr_auto] lg:items-end">
           <label>
             <span className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">Review Status</span>
             <select
@@ -158,6 +170,20 @@ export default function GptExtractionBenchmarkPage() {
               className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
             >
               {statusOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">Run Status</span>
+            <select
+              value={benchmarkStatus}
+              onChange={(event) => setBenchmarkStatus(event.target.value)}
+              className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
+            >
+              {benchmarkStatusOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>

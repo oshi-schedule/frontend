@@ -1153,12 +1153,14 @@ export function getGptExtractionBenchmarkStats(options: { benchmarkModel?: strin
 export function listGptExtractionBenchmarkCandidates(options: {
   limit?: number;
   reviewStatus?: string | null;
+  benchmarkStatus?: string | null;
   benchmarkModel?: string | null;
 } = {}) {
   return apiFetch<TrainingCandidateBenchmarkCandidateListResponse>("/admin/labs/gpt-extraction-benchmark/candidates", {
     query: {
       limit: options.limit ?? 50,
       review_status: options.reviewStatus,
+      benchmark_status: options.benchmarkStatus,
       benchmark_type: "image_direct",
       benchmark_model: options.benchmarkModel,
     },
