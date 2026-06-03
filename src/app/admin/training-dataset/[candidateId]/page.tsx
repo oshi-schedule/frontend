@@ -11,9 +11,11 @@ import {
   getTrainingDatasetBenchmarkJob,
   listTrainingDatasetCandidates,
   listTrainingDatasetBenchmarkRuns,
+  runTrainingDatasetGptReview,
   saveTrainingDatasetGroundTruth,
   type TrainingBenchmarkJobRead,
   type TrainingCandidateBenchmarkRunRead,
+  type TrainingCandidateGptReviewRead,
   type TrainingEventCandidateRead,
 } from "@/api/admin-ocr";
 import { PageHeader } from "@/components/layout/page-header";
@@ -293,6 +295,101 @@ function CopyImageButton({ imageUrl, fallbackUrl, label, fallbackLabel }: { imag
   );
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function approvedText(value: unknown): string {
+  return value === true ? "修正不要" : "修正提案あり";
+}
+
+function GptReviewerResult({ review }: { review: TrainingCandidateGptReviewRead }) {
+  const result = asRecord(review.review_result_json);
+  const extraction = asRecord(result.extraction_review);
+  const groups = asRecord(result.group_candidates_review);
+  const sessions = asRecord(result.sessions_review);
+  const approved = result.approved === true;
+  return (
+    <Card className={`min-w-0 space-y-4 p-5 ${approved ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">GPT Reviewer</p>
+          <h2 className="mt-1 font-bold text-slate-950">{approved ? "修正不要" : "GPT修正レビュー結果"}</h2>
+          <p className="mt-1 text-sm text-slate-700">{String(result.summary ?? "-")}</p>
+          <p className="mt-2 font-mono text-xs text-slate-500">
+            {review.review_model} / {review.review_prompt_version} / {review.latency_ms ?? "-"}ms / {review.total_tokens ?? "-"} tokens
+          </p>
+        </div>
+        <CopyButton text={prettyJson(review.review_result_json)} label="結果コピー" copiedLabel="コピー済み" />
+      </div>
+      {review.status === "failed" ? (
+        <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{review.error_message ?? "GPT Reviewerに失敗しました。"}</p>
+      ) : null}
+      <div className="grid gap-4 xl:grid-cols-3">
+        <div className="rounded-2xl border border-white/70 bg-white p-4">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="font-bold">Event Info</h3>
+            <span className={`rounded-full px-3 py-1 text-xs font-bold ${extraction.approved === true ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+              {approvedText(extraction.approved)}
+            </span>
+          </div>
+          {asArray(extraction.suggestions).length ? (
+            <div className="space-y-2">
+              {asArray(extraction.suggestions).map((item, index) => {
+                const suggestion = asRecord(item);
+                return (
+                  <div key={index} className="rounded-xl border border-slate-200 p-3 text-sm">
+                    <p className="font-mono text-xs font-bold text-slate-500">{String(suggestion.field ?? "-")}</p>
+                    <p className="mt-2 text-slate-600">current: {String(suggestion.current ?? "null")}</p>
+                    <p className="font-semibold text-slate-950">suggested: {String(suggestion.suggested ?? "null")}</p>
+                    <p className="mt-1 text-xs text-slate-500">{String(suggestion.reason ?? "")}</p>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">修正提案はありません。</p>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-white/70 bg-white p-4">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="font-bold">Group Candidates</h3>
+            <CopyButton text={prettyJson(groups.corrected_json ?? [])} label="corrected_json" copiedLabel="コピー済み" />
+          </div>
+          <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${groups.approved === true ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+            {approvedText(groups.approved)}
+          </p>
+          <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
+            <p className="rounded-lg bg-slate-50 p-2">add {asArray(groups.add).length}</p>
+            <p className="rounded-lg bg-slate-50 p-2">remove {asArray(groups.remove).length}</p>
+            <p className="rounded-lg bg-slate-50 p-2">replace {asArray(groups.replace).length}</p>
+          </div>
+          <div className="mt-3">
+            <JsonBlock value={{ add: groups.add ?? [], remove: groups.remove ?? [], replace: groups.replace ?? [] }} />
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-white/70 bg-white p-4">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="font-bold">Sessions</h3>
+            <CopyButton text={prettyJson(sessions.corrected_json ?? [])} label="corrected_json" copiedLabel="コピー済み" />
+          </div>
+          <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${sessions.approved === true ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+            {approvedText(sessions.approved)}
+          </p>
+          <p className="mb-3 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">issues {asArray(sessions.issues).length}</p>
+          <JsonBlock value={{ issues: sessions.issues ?? [], corrected_json: sessions.corrected_json ?? [] }} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function benchmarkSummary(run: TrainingCandidateBenchmarkRunRead): string {
   const prediction = run.prediction_json ?? {};
   const sessions = Array.isArray(prediction.sessions) ? prediction.sessions.length : 0;
@@ -392,6 +489,9 @@ export default function TrainingDatasetReviewPage() {
   const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
   const [benchmarkModels, setBenchmarkModels] = useState("gpt-5-mini");
   const [benchmarkRoutes, setBenchmarkRoutes] = useState<string[]>(["text", "vision", "layout"]);
+  const [gptReview, setGptReview] = useState<TrainingCandidateGptReviewRead | null>(null);
+  const [isGptReviewing, setIsGptReviewing] = useState(false);
+  const [gptReviewError, setGptReviewError] = useState<string | null>(null);
 
   useEffect(() => {
     void loadCandidate();
@@ -407,6 +507,8 @@ export default function TrainingDatasetReviewPage() {
     setJsonError(null);
     setSaveMessage(null);
     setReviewNote("");
+    setGptReview(candidate?.gpt_reviews?.[0] ?? null);
+    setGptReviewError(null);
   }, [candidate]);
 
   const rawTexts = useMemo(() => {
@@ -692,6 +794,28 @@ export default function TrainingDatasetReviewPage() {
     }
   }
 
+  async function handleRunGptReview() {
+    if (!candidate) return;
+    setIsGptReviewing(true);
+    setGptReviewError(null);
+    try {
+      const review = await runTrainingDatasetGptReview(candidate.id);
+      setGptReview(review);
+      setCandidate((current) =>
+        current
+          ? {
+              ...current,
+              gpt_reviews: [review, ...(current.gpt_reviews ?? [])],
+            }
+          : current,
+      );
+    } catch (err) {
+      setGptReviewError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "GPT修正レビューに失敗しました。");
+    } finally {
+      setIsGptReviewing(false);
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -797,9 +921,14 @@ export default function TrainingDatasetReviewPage() {
             <Button type="button" variant="outline" onClick={goToNextPending}>
               次候補
             </Button>
+            <Button type="button" variant="outline" onClick={handleRunGptReview} disabled={isGptReviewing}>
+              {isGptReviewing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              GPT修正レビュー
+            </Button>
           </div>
         </div>
         <p className="mt-2 text-xs text-slate-500">ショートカット: Ctrl/Cmd+S 保存 / g n 次候補 / a p 承認して次へ。入力中は無効です。</p>
+        {gptReviewError ? <p className="mt-2 rounded-xl bg-red-50 p-3 text-sm text-red-700">{gptReviewError}</p> : null}
       </Card>
 
       <div className="space-y-5">
@@ -1312,6 +1441,8 @@ export default function TrainingDatasetReviewPage() {
             </div>
           </Card>
         </div>
+
+        {gptReview ? <GptReviewerResult review={gptReview} /> : null}
       </div>
 
       <Card className="min-w-0 space-y-4 p-5">

@@ -335,6 +335,7 @@ export interface TrainingEventCandidateRead {
   reviewer: string | null;
   reviewed_at: string | null;
   review_revisions?: TrainingEventCandidateReviewRevisionRead[];
+  gpt_reviews?: TrainingCandidateGptReviewRead[];
   created_at: string;
   updated_at: string;
 }
@@ -352,6 +353,23 @@ export interface TrainingEventCandidateReviewRevisionRead {
   review_metadata_json: Record<string, unknown> | null;
   review_seconds: number | null;
   note: string | null;
+  created_at: string;
+}
+
+export interface TrainingCandidateGptReviewRead {
+  id: string;
+  training_candidate_id: string;
+  review_model: string;
+  review_prompt_version: string;
+  review_result_json: Record<string, unknown>;
+  input_payload_json: Record<string, unknown>;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost_usd: number | null;
+  latency_ms: number | null;
+  status: string;
+  error_message: string | null;
   created_at: string;
 }
 
@@ -1035,4 +1053,10 @@ export function getTrainingDatasetBenchmarkJob(jobId: string) {
 
 export function listTrainingDatasetBenchmarkRuns(candidateId: string) {
   return apiFetch<TrainingCandidateBenchmarkRunListResponse>(`/admin/training-dataset/${candidateId}/benchmark-runs`);
+}
+
+export function runTrainingDatasetGptReview(candidateId: string) {
+  return apiFetch<TrainingCandidateGptReviewRead>(`/admin/training-dataset/candidates/${candidateId}/gpt-review`, {
+    method: "POST",
+  });
 }
