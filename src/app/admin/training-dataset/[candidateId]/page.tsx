@@ -13,9 +13,12 @@ import {
   listTrainingDatasetCandidates,
   listTrainingDatasetBenchmarkRuns,
   runTrainingDatasetGptReview,
+  runTrainingDatasetGptFix,
   saveTrainingDatasetGroundTruth,
   type TrainingBenchmarkJobRead,
   type TrainingCandidateBenchmarkRunRead,
+  type TrainingCandidateGptFixChange,
+  type TrainingCandidateGptFixResponse,
   type TrainingCandidateGptReviewRead,
   type TrainingEventCandidateRead,
 } from "@/api/admin-ocr";
@@ -423,6 +426,60 @@ function GptIssuesList({ issues, approved }: { issues: unknown; approved: unknow
   );
 }
 
+function issueField(issue: Record<string, unknown>): string {
+  return String(issue.field ?? "").split(".").pop()?.replace(/\[\d+\]/g, "") ?? "";
+}
+
+function issueIndex(issue: Record<string, unknown>): number | null {
+  return typeof issue.index === "number" && Number.isInteger(issue.index) ? issue.index : null;
+}
+
+function issueCurrent(issue: Record<string, unknown>): string {
+  return String(issue.current ?? "");
+}
+
+function issueExpected(issue: Record<string, unknown>): string {
+  return String((issue.expected ?? issue.suggested) ?? "");
+}
+
+function buildVenueProposal(currentVenues: VenueDraft[], issues: Record<string, unknown>[]): VenueDraft[] {
+  const next = currentVenues.length ? currentVenues.map((venue) => ({ ...venue })) : [{ venue_name: "", open_time: "", start_time: "", note: "" }];
+  issues.forEach((issue) => {
+    const field = issueField(issue);
+    if (!["venue_name", "name", "open_time", "start_time", "note"].includes(field)) return;
+    const index = issueIndex(issue) ?? 0;
+    while (next.length <= index) {
+      next.push({ venue_name: "", open_time: "", start_time: "", note: "" });
+    }
+    const key = field === "name" ? "venue_name" : field;
+    next[index] = { ...next[index], [key]: issueExpected(issue) };
+  });
+  return next.filter((venue) => venue.venue_name || venue.open_time || venue.start_time || venue.note);
+}
+
+function canApplyGroupIssue(issue: Record<string, unknown>): boolean {
+  const field = issueField(issue);
+  return ["group_name", "name", "raw_name"].includes(field) && Boolean(issueCurrent(issue) || issueExpected(issue));
+}
+
+function canApplySessionIssue(issue: Record<string, unknown>): boolean {
+  const field = issueField(issue);
+  return ["session_type", "group_name", "title", "container_id", "venue_name", "stage_name", "start_time", "end_time", "note"].includes(field) && issueIndex(issue) !== null;
+}
+
+function fixChangeKey(change: TrainingCandidateGptFixChange, index: number): string {
+  return `${index}:${change.section}:${change.operation}:${change.index ?? "new"}:${change.field ?? "-"}`;
+}
+
+function canApplyFixChange(change: TrainingCandidateGptFixChange): boolean {
+  if (!["venues", "group_candidates", "sessions"].includes(change.section)) return false;
+  if (!["add", "remove", "replace"].includes(change.operation)) return false;
+  if (change.section === "venues") return change.operation === "add" || change.index !== null;
+  if (change.section === "group_candidates") return change.operation === "add" || change.index !== null || Boolean(change.old_value);
+  if (change.section === "sessions") return change.index !== null;
+  return false;
+}
+
 function GptReviewerResult({ review }: { review: TrainingCandidateGptReviewRead }) {
   const result = asRecord(review.review_result_json);
   const extraction = asRecord(result.extraction_review);
@@ -666,6 +723,10 @@ export default function TrainingDatasetReviewPage() {
   const [gptReview, setGptReview] = useState<TrainingCandidateGptReviewRead | null>(null);
   const [isGptReviewing, setIsGptReviewing] = useState(false);
   const [gptReviewError, setGptReviewError] = useState<string | null>(null);
+  const [gptFix, setGptFix] = useState<TrainingCandidateGptFixResponse | null>(null);
+  const [isGptFixing, setIsGptFixing] = useState(false);
+  const [gptFixError, setGptFixError] = useState<string | null>(null);
+  const [ignoredFixChangeKeys, setIgnoredFixChangeKeys] = useState<string[]>([]);
 
   useEffect(() => {
     void loadCandidate();
@@ -683,6 +744,9 @@ export default function TrainingDatasetReviewPage() {
     setReviewNote("");
     setGptReview(candidate?.gpt_reviews?.[0] ?? null);
     setGptReviewError(null);
+    setGptFix(null);
+    setGptFixError(null);
+    setIgnoredFixChangeKeys([]);
   }, [candidate]);
 
   useEffect(() => {
@@ -755,6 +819,16 @@ export default function TrainingDatasetReviewPage() {
     }));
   }
 
+  function applyVenueProposalFromGpt() {
+    const proposal = buildVenueProposal(form.venues, getGptIssuesForSection(gptReview, "venues_review"));
+    if (!proposal.length) {
+      setSaveMessage("適用できる会場修正はありません。");
+      return;
+    }
+    setForm((current) => ({ ...current, venues: proposal }));
+    setSaveMessage("GPT venue issues から会場情報を反映しました。保存するとGround Truthに反映されます。");
+  }
+
   function addGroupCandidate() {
     setForm((current) => ({
       ...current,
@@ -767,6 +841,30 @@ export default function TrainingDatasetReviewPage() {
       ...current,
       group_candidates: current.group_candidates.filter((_, currentIndex) => currentIndex !== index),
     }));
+  }
+
+  function applyGroupIssue(issue: Record<string, unknown>) {
+    const expected = issueExpected(issue).trim();
+    const currentValue = issueCurrent(issue).trim();
+    const targetIndex = issueIndex(issue);
+    setForm((current) => {
+      let nextGroups = [...current.group_candidates];
+      if (expected && currentValue) {
+        nextGroups = nextGroups.map((item, index) =>
+          (targetIndex !== null ? index === targetIndex : item.group_name === currentValue)
+            ? { ...item, group_name: expected, match_method: item.match_method || "gpt_issue_patch" }
+            : item,
+        );
+      } else if (expected) {
+        const exists = nextGroups.some((item) => item.group_name === expected);
+        if (!exists) nextGroups = [...nextGroups, { group_name: expected, score: null, match_method: "gpt_issue_patch" }];
+      } else if (currentValue) {
+        nextGroups = nextGroups.filter((item, index) => (targetIndex !== null ? index !== targetIndex : item.group_name !== currentValue));
+      }
+      setGroupJson(prettyJson(nextGroups));
+      return { ...current, group_candidates: nextGroups };
+    });
+    setSaveMessage("GPT group issue をフォームへ反映しました。保存するとGround Truthに反映されます。");
   }
 
   function updateItemSourceType(index: number, correctSourceType: string) {
@@ -846,6 +944,21 @@ export default function TrainingDatasetReviewPage() {
       ...current,
       sessions: current.sessions.filter((_, currentIndex) => currentIndex !== index),
     }));
+  }
+
+  function applySessionIssue(issue: Record<string, unknown>) {
+    const field = issueField(issue) as keyof SessionDraft;
+    const targetIndex = issueIndex(issue);
+    if (targetIndex === null) return;
+    const expected = issueExpected(issue);
+    setForm((current) => {
+      const nextSessions = current.sessions.map((session, index) =>
+        index === targetIndex ? { ...session, [field]: expected } : session,
+      );
+      setSessionJson(prettyJson(nextSessions));
+      return { ...current, sessions: nextSessions };
+    });
+    setSaveMessage("GPT session issue をフォームへ反映しました。保存するとGround Truthに反映されます。");
   }
 
   function nextPendingCandidateId(): string | null {
@@ -1045,6 +1158,100 @@ export default function TrainingDatasetReviewPage() {
     }
   }
 
+  async function handleGenerateGptFix() {
+    if (!candidate || !gptReview) return;
+    setIsGptFixing(true);
+    setGptFixError(null);
+    setIgnoredFixChangeKeys([]);
+    try {
+      const result = await runTrainingDatasetGptFix(candidate.id, {
+        review_result_json: gptReview.review_result_json,
+      });
+      setGptFix(result);
+      if (result.changes.length === 0) {
+        setSaveMessage("GPT Fix Generatorは適用可能な差分パッチを返しませんでした。");
+      }
+    } catch (err) {
+      setGptFixError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "GPT Fix生成に失敗しました。");
+    } finally {
+      setIsGptFixing(false);
+    }
+  }
+
+  function ignoreFixChange(change: TrainingCandidateGptFixChange, index: number) {
+    const key = fixChangeKey(change, index);
+    setIgnoredFixChangeKeys((current) => (current.includes(key) ? current : [...current, key]));
+  }
+
+  function applyFixChange(change: TrainingCandidateGptFixChange) {
+    if (!canApplyFixChange(change)) return;
+    const index = change.index;
+    const field = change.field ?? "";
+    const nextValue = change.new_value ?? "";
+    setForm((current) => {
+      if (change.section === "venues") {
+        let venues = [...current.venues];
+        if (change.operation === "add") {
+          venues = [...venues, { venue_name: field === "venue_name" ? nextValue : "", open_time: field === "open_time" ? nextValue : "", start_time: field === "start_time" ? nextValue : "", note: "" }];
+        } else if (index !== null && venues[index]) {
+          if (change.operation === "remove") {
+            venues = venues.filter((_, currentIndex) => currentIndex !== index);
+          } else if (["venue_name", "open_time", "start_time", "note"].includes(field)) {
+            venues = venues.map((venue, currentIndex) => (currentIndex === index ? { ...venue, [field]: nextValue } : venue));
+          }
+        }
+        return { ...current, venues };
+      }
+      if (change.section === "group_candidates") {
+        let groups = [...current.group_candidates];
+        if (change.operation === "add") {
+          groups = [...groups, { group_name: nextValue, score: null, match_method: "gpt_fix_patch" }].filter((item) => item.group_name);
+        } else if (change.operation === "remove") {
+          groups = groups.filter((item, currentIndex) => (index !== null ? currentIndex !== index : item.group_name !== change.old_value));
+        } else if (field === "group_name") {
+          groups = groups.map((item, currentIndex) =>
+            (index !== null ? currentIndex === index : item.group_name === change.old_value)
+              ? { ...item, group_name: nextValue, match_method: item.match_method || "gpt_fix_patch" }
+              : item,
+          );
+        }
+        setGroupJson(prettyJson(groups));
+        return { ...current, group_candidates: groups };
+      }
+      if (change.section === "sessions" && index !== null) {
+        const allowedFields = ["session_type", "group_name", "title", "container_id", "venue_name", "stage_name", "start_time", "end_time", "note"];
+        let sessions = [...current.sessions];
+        if (change.operation === "remove") {
+          sessions = sessions.filter((_, currentIndex) => currentIndex !== index);
+        } else if (allowedFields.includes(field)) {
+          sessions = sessions.map((session, currentIndex) => (currentIndex === index ? { ...session, [field]: nextValue } : session));
+        }
+        setSessionJson(prettyJson(sessions));
+        return { ...current, sessions };
+      }
+      return current;
+    });
+    setSaveMessage("GPT Fix patchをフォームへ反映しました。保存するとGround Truthに反映されます。");
+  }
+
+  function applyAndIgnoreFixChange(change: TrainingCandidateGptFixChange, index: number) {
+    applyFixChange(change);
+    ignoreFixChange(change, index);
+  }
+
+  function applyAllFixChanges() {
+    (gptFix?.changes ?? []).forEach((change, index) => {
+      const key = fixChangeKey(change, index);
+      if (!ignoredFixChangeKeys.includes(key)) applyFixChange(change);
+    });
+    setIgnoredFixChangeKeys((gptFix?.changes ?? []).map(fixChangeKey));
+  }
+
+  function rejectAllFixChanges() {
+    setIgnoredFixChangeKeys((gptFix?.changes ?? []).map(fixChangeKey));
+    setSaveMessage("GPT Fix patchを全件無視しました。");
+  }
+
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -1085,6 +1292,14 @@ export default function TrainingDatasetReviewPage() {
   const gptVenuesReview = getGptSection(gptReview, "venues_review");
   const gptGroupsReview = getGptSection(gptReview, "group_candidates_review");
   const gptSessionsReview = getGptSection(gptReview, "sessions_review");
+  const gptVenueIssues = getGptIssuesForSection(gptReview, "venues_review");
+  const gptGroupIssues = getGptIssuesForSection(gptReview, "group_candidates_review");
+  const gptSessionIssues = getGptIssuesForSection(gptReview, "sessions_review");
+  const gptVenueProposal = buildVenueProposal(form.venues, gptVenueIssues);
+  const applicableGroupIssues = gptGroupIssues.filter(canApplyGroupIssue);
+  const applicableSessionIssues = gptSessionIssues.filter(canApplySessionIssue);
+  const gptFixChanges = gptFix?.changes ?? [];
+  const activeFixChanges = gptFixChanges.filter((change, index) => !ignoredFixChangeKeys.includes(fixChangeKey(change, index)));
 
   return (
     <div className="space-y-6">
@@ -1162,13 +1377,82 @@ export default function TrainingDatasetReviewPage() {
               {isGptReviewing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               GPT修正レビュー開始
             </Button>
+            <Button type="button" variant="outline" onClick={handleGenerateGptFix} disabled={!gptReview || isGptReviewing || isGptFixing}>
+              {isGptFixing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Generate Fix
+            </Button>
           </div>
         </div>
         <p className="mt-2 text-xs text-slate-500">ショートカット: Ctrl/Cmd+S 保存 / g n 次候補 / a p 承認して次へ。入力中は無効です。</p>
         {gptReviewError ? <p className="mt-2 rounded-xl bg-red-50 p-3 text-sm text-red-700">{gptReviewError}</p> : null}
+        {gptFixError ? <p className="mt-2 rounded-xl bg-red-50 p-3 text-sm text-red-700">{gptFixError}</p> : null}
       </Card>
 
       {gptReview ? <GptReviewerResult review={gptReview} /> : null}
+
+      {gptFix ? (
+        <Card className="min-w-0 space-y-4 border-emerald-200 bg-emerald-50 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">GPT Fix Generator</p>
+              <h2 className="mt-1 font-bold text-emerald-950">Patch Preview</h2>
+              <p className="mt-1 text-sm text-emerald-800">
+                {gptFix.prompt_version} / {gptFix.model} / {gptFix.latency_ms ?? "-"}ms / {gptFix.total_tokens ?? "-"} tokens
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <CopyButton text={prettyJson(gptFix)} label="patchコピー" copiedLabel="コピー済み" />
+              <Button type="button" variant="outline" onClick={rejectAllFixChanges} disabled={gptFixChanges.length === 0}>
+                全件無視
+              </Button>
+              <Button type="button" onClick={applyAllFixChanges} disabled={activeFixChanges.length === 0}>
+                全件適用
+              </Button>
+            </div>
+          </div>
+          <div className="grid gap-3 text-sm font-semibold text-slate-700 md:grid-cols-4">
+            <p className="rounded-xl bg-white p-3">changes {gptFixChanges.length}</p>
+            <p className="rounded-xl bg-white p-3">active {activeFixChanges.length}</p>
+            <p className="rounded-xl bg-white p-3">ignored {ignoredFixChangeKeys.length}</p>
+            <p className="rounded-xl bg-white p-3">cost {gptFix.estimated_cost_usd != null ? `$${gptFix.estimated_cost_usd}` : "$-"}</p>
+          </div>
+          <div className="space-y-2">
+            {gptFixChanges.map((change, index) => {
+              const key = fixChangeKey(change, index);
+              const ignored = ignoredFixChangeKeys.includes(key);
+              return (
+                <div key={key} className={`grid gap-3 rounded-2xl border p-4 text-sm md:grid-cols-[minmax(0,1fr)_auto] md:items-center ${ignored ? "border-slate-200 bg-white/70 opacity-60" : "border-emerald-200 bg-white"}`}>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap gap-2 text-xs font-bold">
+                      <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">{change.section}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">{change.operation}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">index {change.index ?? "-"}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">{change.field ?? "-"}</span>
+                    </div>
+                    <p className="mt-3 break-words">
+                      <span className="text-slate-500">{change.old_value ?? "null"}</span>
+                      <span className="mx-2 font-bold text-emerald-700">→</span>
+                      <span className="font-semibold text-slate-950">{change.new_value ?? "null"}</span>
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">{change.reason}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" size="sm" variant="outline" onClick={() => ignoreFixChange(change, index)} disabled={ignored}>
+                      無視
+                    </Button>
+                    <Button type="button" size="sm" onClick={() => applyAndIgnoreFixChange(change, index)} disabled={ignored || !canApplyFixChange(change)}>
+                      適用
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+            {gptFixChanges.length === 0 ? (
+              <p className="rounded-xl bg-white p-3 text-sm text-slate-500">GPT Fix Generatorからpatchは返っていません。</p>
+            ) : null}
+          </div>
+        </Card>
+      ) : null}
 
       <div className="space-y-5">
         <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.1fr)_minmax(0,1fr)]">
@@ -1526,7 +1810,20 @@ export default function TrainingDatasetReviewPage() {
                   </div>
                   <div className="rounded-xl bg-amber-50 p-3">
                     <p className="mb-2 text-xs font-bold uppercase tracking-[0.14em] text-amber-600">GPT venue issues</p>
-                    <GptIssuesList issues={gptVenuesReview.issues} approved={gptVenuesReview.approved} />
+                    <GptIssuesList issues={gptVenueIssues} approved={gptVenueIssues.length === 0} />
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">GPT Venue Proposal</p>
+                      <Button type="button" size="sm" onClick={applyVenueProposalFromGpt} disabled={gptVenueIssues.length === 0 || gptVenueProposal.length === 0}>
+                        この会場情報を適用
+                      </Button>
+                    </div>
+                    {gptVenueProposal.length ? (
+                      <JsonBlock value={gptVenueProposal} />
+                    ) : (
+                      <p className="rounded-xl bg-white p-3 text-sm text-slate-500">適用できる会場提案はありません。</p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1553,13 +1850,44 @@ export default function TrainingDatasetReviewPage() {
                 <div className="mt-2 grid gap-2 text-sm font-semibold text-slate-700 sm:grid-cols-3">
                   <p className="rounded-lg bg-white p-2">P {Array.isArray(candidate.prediction_json.group_candidates) ? candidate.prediction_json.group_candidates.length : 0}</p>
                   <p className="rounded-lg bg-white p-2">GT {form.group_candidates.length}</p>
-                  <p className="rounded-lg bg-white p-2">Issues {asArray(gptGroupsReview.issues).length}</p>
+                  <p className="rounded-lg bg-white p-2">Issues {gptGroupIssues.length}</p>
                 </div>
               </div>
               <ReviewCommentBlock title="groups" countComment={gptGroupsReview.count_comment} contentComment={gptGroupsReview.content_comment} />
             </div>
 
-            <GptIssuesList issues={gptGroupsReview.issues} approved={gptGroupsReview.approved} />
+            <GptIssuesList issues={gptGroupIssues} approved={gptGroupIssues.length === 0} />
+
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-bold text-emerald-950">Group Fix Merge</h3>
+                  <p className="mt-1 text-sm text-emerald-800">GPT issues の expected だけをフォームへ個別反映します。</p>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-emerald-700">{applicableGroupIssues.length} changes</span>
+              </div>
+              <div className="mt-3 space-y-2">
+                {applicableGroupIssues.map((issue, index) => (
+                  <div key={index} className="grid gap-3 rounded-xl bg-white p-3 text-sm md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                    <div className="min-w-0">
+                      <p className="font-mono text-xs font-bold text-slate-500">{issueField(issue)}</p>
+                      <p className="mt-1 break-words">
+                        <span className="text-slate-500">{issueCurrent(issue) || "追加"}</span>
+                        <span className="mx-2 font-bold text-emerald-700">→</span>
+                        <span className="font-semibold text-slate-950">{issueExpected(issue) || "削除"}</span>
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">{String(issue.reason ?? "")}</p>
+                    </div>
+                    <Button type="button" size="sm" onClick={() => applyGroupIssue(issue)}>
+                      適用
+                    </Button>
+                  </div>
+                ))}
+                {applicableGroupIssues.length === 0 ? (
+                  <p className="rounded-xl bg-white p-3 text-sm text-slate-500">適用できるgroup修正はありません。</p>
+                ) : null}
+              </div>
+            </div>
 
             <div className="grid gap-3 xl:grid-cols-2">
               <div className="rounded-2xl border border-slate-200 p-4">
@@ -1666,13 +1994,49 @@ export default function TrainingDatasetReviewPage() {
                 <div className="mt-2 grid gap-2 text-sm font-semibold text-slate-700 sm:grid-cols-3">
                   <p className="rounded-lg bg-white p-2">P {Array.isArray(candidate.prediction_json.sessions) ? candidate.prediction_json.sessions.length : 0}</p>
                   <p className="rounded-lg bg-white p-2">GT {form.sessions.length}</p>
-                  <p className="rounded-lg bg-white p-2">Issues {asArray(gptSessionsReview.issues).length}</p>
+                  <p className="rounded-lg bg-white p-2">Issues {gptSessionIssues.length}</p>
                 </div>
               </div>
               <ReviewCommentBlock title="sessions" countComment={gptSessionsReview.count_comment} contentComment={gptSessionsReview.content_comment} />
             </div>
 
-            <GptIssuesList issues={gptSessionsReview.issues} approved={gptSessionsReview.approved} />
+            <GptIssuesList issues={gptSessionIssues} approved={gptSessionIssues.length === 0} />
+
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-bold text-emerald-950">Session Fix Merge</h3>
+                  <p className="mt-1 text-sm text-emerald-800">問題のあるsessionだけ、field単位でフォームへ反映します。</p>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-emerald-700">{applicableSessionIssues.length} changes</span>
+              </div>
+              <div className="mt-3 space-y-2">
+                {applicableSessionIssues.map((issue, index) => {
+                  const targetIndex = issueIndex(issue);
+                  return (
+                    <div key={index} className="grid gap-3 rounded-xl bg-white p-3 text-sm md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                      <div className="min-w-0">
+                        <p className="font-mono text-xs font-bold text-slate-500">
+                          session #{targetIndex !== null ? targetIndex + 1 : "-"} / {issueField(issue)}
+                        </p>
+                        <p className="mt-1 break-words">
+                          <span className="text-slate-500">{issueCurrent(issue) || "null"}</span>
+                          <span className="mx-2 font-bold text-emerald-700">→</span>
+                          <span className="font-semibold text-slate-950">{issueExpected(issue) || "null"}</span>
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">{String(issue.reason ?? "")}</p>
+                      </div>
+                      <Button type="button" size="sm" onClick={() => applySessionIssue(issue)}>
+                        適用
+                      </Button>
+                    </div>
+                  );
+                })}
+                {applicableSessionIssues.length === 0 ? (
+                  <p className="rounded-xl bg-white p-3 text-sm text-slate-500">適用できるsession修正はありません。</p>
+                ) : null}
+              </div>
+            </div>
 
             <div className="grid gap-3 xl:grid-cols-2">
               <div className="rounded-2xl border border-slate-200 p-4">

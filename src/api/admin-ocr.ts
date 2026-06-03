@@ -373,6 +373,29 @@ export interface TrainingCandidateGptReviewRead {
   created_at: string;
 }
 
+export interface TrainingCandidateGptFixChange {
+  section: "venues" | "group_candidates" | "sessions" | string;
+  operation: "add" | "remove" | "replace" | string;
+  index: number | null;
+  field: string | null;
+  old_value: string | null;
+  new_value: string | null;
+  reason: string;
+  confidence: number | null;
+}
+
+export interface TrainingCandidateGptFixResponse {
+  model: string;
+  prompt_version: string;
+  changes: TrainingCandidateGptFixChange[];
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost_usd: number | null;
+  latency_ms: number | null;
+  raw_result_json: Record<string, unknown>;
+}
+
 export interface TrainingDatasetJobRead {
   job_id: string;
   status: TrainingDatasetJobStatus | string;
@@ -1063,4 +1086,11 @@ export function runTrainingDatasetGptReview(candidateId: string) {
 
 export function getTrainingDatasetGptReview(reviewId: string) {
   return apiFetch<TrainingCandidateGptReviewRead>(`/admin/training-dataset/candidates/gpt-reviews/${reviewId}`);
+}
+
+export function runTrainingDatasetGptFix(candidateId: string, payload: { review_result_json: Record<string, unknown> }) {
+  return apiFetch<TrainingCandidateGptFixResponse>(`/admin/training-dataset/candidates/${candidateId}/gpt-fix`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
