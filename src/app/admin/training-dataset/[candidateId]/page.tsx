@@ -1302,12 +1302,6 @@ export default function TrainingDatasetReviewPage() {
     setSaveMessage("GPT Fix patchをフォームへ反映しました。保存するとGround Truthに反映されます。");
   }
 
-  function applyAndIgnoreFixChange(change: TrainingCandidateGptFixChange, index: number) {
-    applyFixChange(change, index);
-    const key = fixChangeKey(change, index);
-    setRejectedFixChangeKeys((current) => (current.includes(key) ? current : [...current, key]));
-  }
-
   function applyAllFixChanges() {
     const generated = gptFix?.changes ?? [];
     generated.forEach((change, index) => {
@@ -1324,6 +1318,7 @@ export default function TrainingDatasetReviewPage() {
       return [...next];
     });
     setRejectedFixChangeKeys([]);
+    setSaveMessage(`${applicableKeys.length}件のGPT Fix patchをフォームへ反映しました。保存するとGround Truthに反映されます。`);
   }
 
   function rejectAllFixChanges() {
@@ -1536,6 +1531,7 @@ export default function TrainingDatasetReviewPage() {
               const rejected = rejectedFixChangeKeys.includes(key);
               const applied = acceptedFixChangeKeys.includes(key);
               const resolved = applied || rejected;
+              const canApply = canApplyFixChange(change);
               return (
                 <div
                   key={key}
@@ -1557,18 +1553,34 @@ export default function TrainingDatasetReviewPage() {
                     </p>
                     <p className="mt-1 text-xs text-slate-500">{change.reason}</p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button type="button" size="sm" variant="outline" onClick={() => ignoreFixChange(change, index)} disabled={resolved}>
-                      無視
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => applyAndIgnoreFixChange(change, index)}
-                      disabled={resolved || !canApplyFixChange(change)}
-                    >
-                      適用
-                    </Button>
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-wrap gap-2 justify-end">
+                      <Button type="button" size="sm" variant="outline" onClick={() => ignoreFixChange(change, index)} disabled={resolved}>
+                        無視
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => applyFixChange(change, index)}
+                        disabled={resolved || !canApply}
+                      >
+                        {resolved ? (applied ? "適用済み" : "無視済み") : canApply ? "適用" : "適用不可"}
+                      </Button>
+                    </div>
+                    <div className="flex justify-end">
+                      {applied ? (
+                        <span className="flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          フォームへ反映済み
+                        </span>
+                      ) : rejected ? (
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500">無視済み</span>
+                      ) : canApply ? (
+                        <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">未適用</span>
+                      ) : (
+                        <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-700">適用不可</span>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
