@@ -1059,21 +1059,31 @@ export default function TrainingDatasetReviewPage() {
               </label>
               <label>
                 <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">open_time</span>
-                <input
-                  type="time"
-                  value={form.open_time}
-                  onChange={(event) => setForm((current) => ({ ...current, open_time: event.target.value }))}
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-base"
-                />
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <input
+                    type="time"
+                    value={form.open_time}
+                    onChange={(event) => setForm((current) => ({ ...current, open_time: event.target.value }))}
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-base md:flex-1"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={() => setForm((current) => ({ ...current, open_time: "" }))}>
+                    NULL
+                  </Button>
+                </div>
               </label>
               <label>
                 <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">start_time</span>
-                <input
-                  type="time"
-                  value={form.start_time}
-                  onChange={(event) => setForm((current) => ({ ...current, start_time: event.target.value }))}
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-base"
-                />
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <input
+                    type="time"
+                    value={form.start_time}
+                    onChange={(event) => setForm((current) => ({ ...current, start_time: event.target.value }))}
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-base md:flex-1"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={() => setForm((current) => ({ ...current, start_time: "" }))}>
+                    NULL
+                  </Button>
+                </div>
               </label>
             </div>
           </Card>
