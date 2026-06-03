@@ -60,9 +60,6 @@ type GroundTruthForm = {
   correct_item_source_types: ItemSourceTypeDraft[];
   event_name: string;
   event_date: string;
-  venue_name: string;
-  open_time: string;
-  start_time: string;
   venues: VenueDraft[];
   group_candidates: GroupCandidateDraft[];
   sessions: SessionDraft[];
@@ -174,7 +171,7 @@ function normalizeSessions(value: unknown): SessionDraft[] {
   });
 }
 
-function normalizeVenues(value: unknown, fallback?: Pick<GroundTruthForm, "venue_name" | "open_time" | "start_time">): VenueDraft[] {
+function normalizeVenues(value: unknown, fallback?: { venue_name?: unknown; open_time?: unknown; start_time?: unknown }): VenueDraft[] {
   const items = Array.isArray(value) ? value : [];
   const normalized = items
     .map((item) => {
@@ -188,8 +185,11 @@ function normalizeVenues(value: unknown, fallback?: Pick<GroundTruthForm, "venue
     })
     .filter((venue) => venue.venue_name || venue.open_time || venue.start_time || venue.note);
   if (normalized.length) return normalized;
-  if (fallback && (fallback.venue_name || fallback.open_time || fallback.start_time)) {
-    return [{ venue_name: fallback.venue_name, open_time: fallback.open_time, start_time: fallback.start_time, note: "" }];
+  const fallbackVenueName = toText(fallback?.venue_name);
+  const fallbackOpenTime = toText(fallback?.open_time);
+  const fallbackStartTime = toText(fallback?.start_time);
+  if (fallbackVenueName || fallbackOpenTime || fallbackStartTime) {
+    return [{ venue_name: fallbackVenueName, open_time: fallbackOpenTime, start_time: fallbackStartTime, note: "" }];
   }
   return [];
 }
@@ -232,18 +232,17 @@ function buildForm(candidate: TrainingEventCandidateRead | null): GroundTruthFor
     candidate?.predicted_source_type ||
     candidate?.source_type ||
     "";
-  const base = {
-    correct_source_type: correctSourceType,
-    correct_item_source_types: buildItemSourceTypeDrafts(candidate),
-    event_name: toText(source.event_name),
-    event_date: toText(source.event_date),
+  const legacyVenue = {
     venue_name: toText(source.venue_name),
     open_time: toText(source.open_time),
     start_time: toText(source.start_time),
   };
   return {
-    ...base,
-    venues: normalizeVenues(source.venues, base),
+    correct_source_type: correctSourceType,
+    correct_item_source_types: buildItemSourceTypeDrafts(candidate),
+    event_name: toText(source.event_name),
+    event_date: toText(source.event_date),
+    venues: normalizeVenues(source.venues, legacyVenue),
     group_candidates: normalizeGroupCandidates(source.group_candidates),
     sessions: normalizeSessions(source.sessions),
   };
@@ -342,6 +341,111 @@ function approvedText(value: unknown): string {
   return value === true ? "修正不要" : "修正提案あり";
 }
 
+function getGptSection(review: TrainingCandidateGptReviewRead | null, key: string): Record<string, unknown> {
+  return asRecord(asRecord(review?.review_result_json)[key]);
+}
+
+function getGptCorrectedExtraction(review: TrainingCandidateGptReviewRead | null): Record<string, unknown> {
+  return asRecord(getGptSection(review, "extraction_review").corrected_json);
+}
+
+function getGptSuggestedField(review: TrainingCandidateGptReviewRead | null, field: string): unknown {
+  const corrected = getGptCorrectedExtraction(review);
+  if (field in corrected) return corrected[field];
+  const suggestions = asArray(getGptSection(review, "extraction_review").suggestions).map(asRecord);
+  return suggestions.find((item) => item.field === field)?.suggested;
+}
+
+function getGptSuggestedVenues(review: TrainingCandidateGptReviewRead | null): VenueDraft[] | null {
+  const venuesReview = getGptSection(review, "venues_review");
+  if (Array.isArray(venuesReview.corrected_json)) {
+    const venues = normalizeVenues(venuesReview.corrected_json);
+    if (venues.length) return venues;
+  }
+  const extractionVenues = getGptCorrectedExtraction(review).venues;
+  if (Array.isArray(extractionVenues)) {
+    const venues = normalizeVenues(extractionVenues);
+    if (venues.length) return venues;
+  }
+  return null;
+}
+
+function getGptSuggestedGroups(review: TrainingCandidateGptReviewRead | null): GroupCandidateDraft[] | null {
+  const groupsReview = getGptSection(review, "group_candidates_review");
+  if (!Array.isArray(groupsReview.corrected_json)) return null;
+  const groups = normalizeGroupCandidates(groupsReview.corrected_json);
+  return groups.length ? groups : null;
+}
+
+function getGptSuggestedSessions(review: TrainingCandidateGptReviewRead | null): SessionDraft[] | null {
+  const sessionsReview = getGptSection(review, "sessions_review");
+  if (!Array.isArray(sessionsReview.corrected_json)) return null;
+  const sessions = normalizeSessions(sessionsReview.corrected_json);
+  return sessions.length ? sessions : null;
+}
+
+function InlineCompare({ label, prediction, gpt }: { label: string; prediction: unknown; gpt: unknown }) {
+  return (
+    <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+      <div className="rounded-lg bg-slate-50 p-2">
+        <p className="font-bold uppercase tracking-[0.12em] text-slate-400">Prediction</p>
+        <p className="mt-1 break-words font-mono">{String(prediction ?? "-")}</p>
+      </div>
+      <div className="rounded-lg bg-amber-50 p-2">
+        <p className="font-bold uppercase tracking-[0.12em] text-amber-600">GPT提案</p>
+        <p className="mt-1 break-words font-mono">{gpt === undefined ? `${label} の提案なし` : String(gpt ?? "null")}</p>
+      </div>
+    </div>
+  );
+}
+
+function ReviewCommentBlock({ title, countComment, contentComment }: { title: string; countComment: unknown; contentComment: unknown }) {
+  return (
+    <div className="grid gap-2 text-sm text-slate-700 md:grid-cols-2">
+      <div className="rounded-xl bg-slate-50 p-3">
+        <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">{title} count</p>
+        <p className="mt-1">{String(countComment || "件数コメントはありません。")}</p>
+      </div>
+      <div className="rounded-xl bg-slate-50 p-3">
+        <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">{title} content</p>
+        <p className="mt-1">{String(contentComment || "内容コメントはありません。")}</p>
+      </div>
+    </div>
+  );
+}
+
+function GptIssuesList({ issues, approved }: { issues: unknown; approved: unknown }) {
+  const items = asArray(issues).map(asRecord);
+  if (!items.length && approved === true) {
+    return <p className="rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700">差分なし</p>;
+  }
+  if (!items.length) {
+    return <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">issues はありません。</p>;
+  }
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-bold text-slate-900">GPT Issues ({items.length})</p>
+      {items.map((issue, index) => {
+        const expected = issue.expected ?? issue.suggested;
+        return (
+          <div key={index} className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full bg-white px-2 py-1 font-mono text-xs font-bold text-amber-700">{String(issue.field ?? "-")}</span>
+              {issue.index !== null && issue.index !== undefined ? <span className="font-mono text-xs text-slate-500">index {String(issue.index)}</span> : null}
+              {issue.group_name ? <span className="text-xs font-semibold text-slate-600">{String(issue.group_name)}</span> : null}
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              <p className="rounded-lg bg-white p-2 text-slate-600">current: {String(issue.current ?? "null")}</p>
+              <p className="rounded-lg bg-white p-2 font-semibold text-slate-900">expected: {String(expected ?? "null")}</p>
+            </div>
+            <p className="mt-2 text-xs text-slate-600">{String(issue.reason ?? "")}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptReviewRead; onApply: () => void }) {
   const result = asRecord(review.review_result_json);
   const extraction = asRecord(result.extraction_review);
@@ -350,6 +454,16 @@ function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptRe
   const sessions = asRecord(result.sessions_review);
   const approved = result.approved === true;
   const isWorking = review.status === "queued" || review.status === "running";
+  const groupCorrectedCount = asArray(groups.corrected_json).length;
+  const sessionCorrectedCount = asArray(sessions.corrected_json).length;
+  const hasReviewPayload =
+    asArray(extraction.suggestions).length > 0 ||
+    asArray(venues.corrected_json).length > 0 ||
+    asArray(groups.issues).length > 0 ||
+    asArray(sessions.issues).length > 0 ||
+    groupCorrectedCount > 0 ||
+    sessionCorrectedCount > 0 ||
+    Boolean(groups.count_comment || groups.content_comment || sessions.count_comment || sessions.content_comment);
   return (
     <Card className={`min-w-0 space-y-4 p-5 ${approved ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -379,7 +493,18 @@ function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptRe
       {review.status === "failed" ? (
         <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{review.error_message ?? "GPT Reviewerに失敗しました。"}</p>
       ) : null}
-      <div className="grid gap-4 xl:grid-cols-4">
+      {review.status === "completed" && !hasReviewPayload ? (
+        <p className="rounded-xl border border-amber-200 bg-white p-3 text-sm font-semibold text-amber-700">
+          GPTの実行は完了していますが、修正提案・コメント・corrected_json が空です。画像入力またはプロンプト結果を確認した方がよさそうです。
+        </p>
+      ) : null}
+      <div className="grid gap-3 text-xs text-slate-600 md:grid-cols-4">
+        <p className="rounded-xl bg-white p-3">Event suggestions {asArray(extraction.suggestions).length}</p>
+        <p className="rounded-xl bg-white p-3">Venues corrected {asArray(venues.corrected_json).length}</p>
+        <p className="rounded-xl bg-white p-3">Group issues {asArray(groups.issues).length}</p>
+        <p className="rounded-xl bg-white p-3">Session issues {asArray(sessions.issues).length}</p>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
         <div className="rounded-2xl border border-white/70 bg-white p-4">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h3 className="font-bold">Event Info</h3>
@@ -432,7 +557,13 @@ function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptRe
             <p className="rounded-lg bg-slate-50 p-2">replace {asArray(groups.replace).length}</p>
           </div>
           <div className="mt-3">
-            <JsonBlock value={{ add: groups.add ?? [], remove: groups.remove ?? [], replace: groups.replace ?? [] }} />
+            <ReviewCommentBlock title="groups" countComment={groups.count_comment} contentComment={groups.content_comment} />
+          </div>
+          <div className="mt-3">
+            <GptIssuesList issues={groups.issues} approved={groups.approved} />
+          </div>
+          <div className="mt-3">
+            <JsonBlock value={{ count_comment: groups.count_comment ?? "", content_comment: groups.content_comment ?? "", issues: groups.issues ?? [], add: groups.add ?? [], remove: groups.remove ?? [], replace: groups.replace ?? [], corrected_json: groups.corrected_json ?? [] }} />
           </div>
         </div>
 
@@ -445,7 +576,13 @@ function GptReviewerResult({ review, onApply }: { review: TrainingCandidateGptRe
             {approvedText(sessions.approved)}
           </p>
           <p className="mb-3 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">issues {asArray(sessions.issues).length}</p>
-          <JsonBlock value={{ issues: sessions.issues ?? [], corrected_json: sessions.corrected_json ?? [] }} />
+          <ReviewCommentBlock title="sessions" countComment={sessions.count_comment} contentComment={sessions.content_comment} />
+          <div className="mt-3">
+            <GptIssuesList issues={sessions.issues} approved={sessions.approved} />
+          </div>
+          <div className="mt-3">
+            <JsonBlock value={{ count_comment: sessions.count_comment ?? "", content_comment: sessions.content_comment ?? "", issues: sessions.issues ?? [], corrected_json: sessions.corrected_json ?? [] }} />
+          </div>
         </div>
       </div>
     </Card>
@@ -483,9 +620,9 @@ function buildGroundTruthPayload(form: GroundTruthForm): Record<string, unknown>
     })),
     event_name: form.event_name.trim() || null,
     event_date: form.event_date || null,
-    venue_name: ((primaryVenue?.venue_name as string | null | undefined) ?? form.venue_name.trim()) || null,
-    open_time: ((primaryVenue?.open_time as string | null | undefined) ?? form.open_time) || null,
-    start_time: ((primaryVenue?.start_time as string | null | undefined) ?? form.start_time) || null,
+    venue_name: primaryVenue?.venue_name || null,
+    open_time: primaryVenue?.open_time || null,
+    start_time: primaryVenue?.start_time || null,
     venues,
     group_candidates: form.group_candidates
       .map((candidate) => ({
@@ -950,15 +1087,13 @@ export default function TrainingDatasetReviewPage() {
     const result = asRecord(gptReview.review_result_json);
     const extraction = asRecord(result.extraction_review);
     const correctedExtraction = asRecord(extraction.corrected_json);
-    const venuesReview = asRecord(result.venues_review);
-    const groupsReview = asRecord(result.group_candidates_review);
-    const sessionsReview = asRecord(result.sessions_review);
     const suggestions = asArray(extraction.suggestions).map(asRecord);
-    const nextGroups = Array.isArray(groupsReview.corrected_json) ? normalizeGroupCandidates(groupsReview.corrected_json) : null;
-    const nextSessions = Array.isArray(sessionsReview.corrected_json) ? normalizeSessions(sessionsReview.corrected_json) : null;
+    const nextVenues = getGptSuggestedVenues(gptReview);
+    const nextGroups = getGptSuggestedGroups(gptReview);
+    const nextSessions = getGptSuggestedSessions(gptReview);
     setForm((current) => {
       const patch: Partial<GroundTruthForm> = {};
-      for (const field of ["event_name", "event_date", "venue_name", "open_time", "start_time"] as const) {
+      for (const field of ["event_name", "event_date"] as const) {
         const fromCorrected = correctedExtraction[field];
         const fromSuggestion = suggestions.find((item) => item.field === field)?.suggested;
         const nextValue = fromCorrected ?? fromSuggestion;
@@ -968,8 +1103,8 @@ export default function TrainingDatasetReviewPage() {
           patch[field] = "";
         }
       }
-      if (Array.isArray(venuesReview.corrected_json)) {
-        patch.venues = normalizeVenues(venuesReview.corrected_json);
+      if (nextVenues) {
+        patch.venues = nextVenues;
       }
       if (nextGroups) {
         patch.group_candidates = nextGroups;
@@ -982,6 +1117,29 @@ export default function TrainingDatasetReviewPage() {
     if (nextGroups) setGroupJson(prettyJson(nextGroups));
     if (nextSessions) setSessionJson(prettyJson(nextSessions));
     setSaveMessage("GPT提案をフォームへ反映しました。内容を確認して保存してください。");
+  }
+
+  function applyGptVenuesToForm() {
+    const nextVenues = getGptSuggestedVenues(gptReview);
+    if (!nextVenues) return;
+    setForm((current) => ({ ...current, venues: nextVenues }));
+    setSaveMessage("GPTのvenues提案をフォームへ反映しました。");
+  }
+
+  function applyGptGroupsToForm() {
+    const nextGroups = getGptSuggestedGroups(gptReview);
+    if (!nextGroups) return;
+    setForm((current) => ({ ...current, group_candidates: nextGroups }));
+    setGroupJson(prettyJson(nextGroups));
+    setSaveMessage("GPTのgroup_candidates提案をフォームへ反映しました。");
+  }
+
+  function applyGptSessionsToForm() {
+    const nextSessions = getGptSuggestedSessions(gptReview);
+    if (!nextSessions) return;
+    setForm((current) => ({ ...current, sessions: nextSessions }));
+    setSessionJson(prettyJson(nextSessions));
+    setSaveMessage("GPTのsessions提案をフォームへ反映しました。");
   }
 
   if (isLoading) {
@@ -1016,6 +1174,16 @@ export default function TrainingDatasetReviewPage() {
   const currentImageDownloadUrl = currentImageAssetId ? sourceAssetImageUrl(currentImageAssetId, true) : "";
   const currentImageFilename = imageModalIndex !== null ? getAssetFilename(currentImageAsset, imageModalIndex) : "source_image.jpg";
   const extractionReviewCopyPayload = buildExtractionReviewCopyPayload(candidate, form, groupJson, sessionJson);
+  const predictionVenues = normalizeVenues(candidate.prediction_json.venues, {
+    venue_name: candidate.prediction_json.venue_name,
+    open_time: candidate.prediction_json.open_time,
+    start_time: candidate.prediction_json.start_time,
+  });
+  const gptSuggestedVenues = getGptSuggestedVenues(gptReview);
+  const gptSuggestedGroups = getGptSuggestedGroups(gptReview);
+  const gptSuggestedSessions = getGptSuggestedSessions(gptReview);
+  const gptGroupsReview = getGptSection(gptReview, "group_candidates_review");
+  const gptSessionsReview = getGptSection(gptReview, "sessions_review");
 
   return (
     <div className="space-y-6">
@@ -1207,7 +1375,7 @@ export default function TrainingDatasetReviewPage() {
               <CopyButton text={JSON.stringify({ prediction_json: candidate.prediction_json, ground_truth_json: buildGroundTruthPayload(form) }, null, 2)} />
             </div>
             <div className="mt-3 grid gap-3">
-              {["event_name", "event_date", "venue_name", "open_time", "start_time"].map((field) => {
+              {["event_name", "event_date"].map((field) => {
                 const predictionValue = candidate.prediction_json[field];
                 const groundTruthValue = (buildGroundTruthPayload(form) as Record<string, unknown>)[field];
                 const changed = predictionValue !== groundTruthValue;
@@ -1221,6 +1389,27 @@ export default function TrainingDatasetReviewPage() {
                   </div>
                 );
               })}
+              {(() => {
+                const predictionVenues = normalizeVenues(candidate.prediction_json.venues, {
+                  venue_name: candidate.prediction_json.venue_name,
+                  open_time: candidate.prediction_json.open_time,
+                  start_time: candidate.prediction_json.start_time,
+                });
+                const changed = prettyJson(predictionVenues) !== prettyJson(form.venues);
+                return (
+                  <div className={`rounded-xl border p-3 text-sm ${changed ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-slate-50"}`}>
+                    <p className="font-mono text-xs font-bold text-slate-500">venues</p>
+                    <div className="mt-2 grid gap-2 md:grid-cols-2">
+                      <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white px-3 py-2 text-xs text-slate-600">
+                        P: {prettyJson(predictionVenues)}
+                      </pre>
+                      <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900">
+                        GT: {prettyJson(form.venues)}
+                      </pre>
+                    </div>
+                  </div>
+                );
+              })()}
               <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
                 <p className="rounded-lg bg-slate-50 p-3">Prediction groups: {Array.isArray(candidate.prediction_json.group_candidates) ? candidate.prediction_json.group_candidates.length : 0}</p>
                 <p className="rounded-lg bg-slate-50 p-3">GT groups: {form.group_candidates.length}</p>
@@ -1323,67 +1512,43 @@ export default function TrainingDatasetReviewPage() {
           </Card>
 
           <Card className="min-w-0 space-y-4 p-5">
-            <div>
-              <h2 className="font-bold">Extraction Review</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                抽出器の教師データです。Event Candidate の値を確認し、人間が正解JSONとして修正します。
-              </p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-bold">Extraction Review</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  抽出器の教師データです。Prediction と GPT提案を見ながら、人間が正解JSONとして修正します。
+                </p>
+              </div>
+              <Button onClick={() => handleSaveGroundTruth("stay")} disabled={isSaving}>
+                {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                Extraction Reviewを保存
+              </Button>
             </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
-              <label className="lg:col-span-2">
-                <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">event_name</span>
-                <input
-                  value={form.event_name}
-                  onChange={(event) => setForm((current) => ({ ...current, event_name: event.target.value }))}
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-lg font-semibold"
-                />
-              </label>
-              <label>
-                <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">event_date</span>
-                <input
-                  type="date"
-                  value={form.event_date}
-                  onChange={(event) => setForm((current) => ({ ...current, event_date: event.target.value }))}
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-base"
-                />
-              </label>
-              <label>
-                <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">venue_name</span>
-                <input
-                  value={form.venue_name}
-                  onChange={(event) => setForm((current) => ({ ...current, venue_name: event.target.value }))}
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-base"
-                />
-              </label>
-              <label>
-                <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">open_time</span>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
+              <div className="space-y-2">
+                <label>
+                  <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">event_name</span>
                   <input
-                    type="time"
-                    value={form.open_time}
-                    onChange={(event) => setForm((current) => ({ ...current, open_time: event.target.value }))}
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-base md:flex-1"
+                    value={form.event_name}
+                    onChange={(event) => setForm((current) => ({ ...current, event_name: event.target.value }))}
+                    className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-lg font-semibold"
                   />
-                  <Button type="button" variant="outline" size="sm" onClick={() => setForm((current) => ({ ...current, open_time: "" }))}>
-                    NULL
-                  </Button>
-                </div>
-              </label>
-              <label>
-                <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">start_time</span>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
+                </label>
+                <InlineCompare label="event_name" prediction={candidate.prediction_json.event_name} gpt={getGptSuggestedField(gptReview, "event_name")} />
+              </div>
+              <div className="space-y-2">
+                <label>
+                  <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">event_date</span>
                   <input
-                    type="time"
-                    value={form.start_time}
-                    onChange={(event) => setForm((current) => ({ ...current, start_time: event.target.value }))}
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-base md:flex-1"
+                    type="date"
+                    value={form.event_date}
+                    onChange={(event) => setForm((current) => ({ ...current, event_date: event.target.value }))}
+                    className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-base"
                   />
-                  <Button type="button" variant="outline" size="sm" onClick={() => setForm((current) => ({ ...current, start_time: "" }))}>
-                    NULL
-                  </Button>
-                </div>
-              </label>
+                </label>
+                <InlineCompare label="event_date" prediction={candidate.prediction_json.event_date} gpt={getGptSuggestedField(gptReview, "event_date")} />
+              </div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 p-4">
@@ -1391,7 +1556,7 @@ export default function TrainingDatasetReviewPage() {
                 <div>
                   <h3 className="font-bold">venues</h3>
                   <p className="mt-1 text-sm text-slate-500">
-                    複数会場イベント用の正解データです。先頭の会場は互換用の venue_name / open_time / start_time にも保存されます。
+                    会場情報の正解データです。保存時のみ、互換用の venue_name / open_time / start_time は先頭venueから自動生成します。
                   </p>
                 </div>
                 <Button type="button" variant="outline" onClick={addVenue}>
@@ -1399,58 +1564,75 @@ export default function TrainingDatasetReviewPage() {
                   会場追加
                 </Button>
               </div>
-              <div className="mt-3 space-y-3">
-                {form.venues.map((venue, index) => (
-                  <div key={index} className="grid gap-3 rounded-xl bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_150px_150px_minmax(0,1fr)_44px] lg:items-end">
-                    <label>
-                      <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">venue #{index + 1}</span>
-                      <input
-                        value={venue.venue_name}
-                        onChange={(event) => updateVenue(index, { venue_name: event.target.value })}
-                        placeholder="会場名"
-                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label>
-                      <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">open</span>
-                      <input
-                        type="time"
-                        value={venue.open_time}
-                        onChange={(event) => updateVenue(index, { open_time: event.target.value })}
-                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label>
-                      <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">start</span>
-                      <input
-                        type="time"
-                        value={venue.start_time}
-                        onChange={(event) => updateVenue(index, { start_time: event.target.value })}
-                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label>
-                      <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">note</span>
-                      <input
-                        value={venue.note}
-                        onChange={(event) => updateVenue(index, { note: event.target.value })}
-                        placeholder="例: ライブ会場 / 特典会会場"
-                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => removeVenue(index)}
-                      className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600"
-                      aria-label="remove venue"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+              <div className="mt-3 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="space-y-3">
+                  {form.venues.map((venue, index) => (
+                    <div key={index} className="grid gap-3 rounded-xl bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_150px_150px_minmax(0,1fr)_44px] lg:items-end">
+                      <label>
+                        <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">venue #{index + 1}</span>
+                        <input
+                          value={venue.venue_name}
+                          onChange={(event) => updateVenue(index, { venue_name: event.target.value })}
+                          placeholder="会場名"
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <label>
+                        <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">open</span>
+                        <input
+                          type="time"
+                          value={venue.open_time}
+                          onChange={(event) => updateVenue(index, { open_time: event.target.value })}
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <label>
+                        <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">start</span>
+                        <input
+                          type="time"
+                          value={venue.start_time}
+                          onChange={(event) => updateVenue(index, { start_time: event.target.value })}
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <label>
+                        <span className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">note</span>
+                        <input
+                          value={venue.note}
+                          onChange={(event) => updateVenue(index, { note: event.target.value })}
+                          placeholder="例: ライブ会場 / 特典会会場"
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => removeVenue(index)}
+                        className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600"
+                        aria-label="remove venue"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                  {form.venues.length === 0 ? (
+                    <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">複数会場情報はありません。必要なら会場追加してください。</p>
+                  ) : null}
+                </div>
+                <div className="space-y-3">
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">Prediction venues</p>
+                    <JsonBlock value={predictionVenues} />
                   </div>
-                ))}
-                {form.venues.length === 0 ? (
-                  <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">複数会場情報はありません。必要なら会場追加してください。</p>
-                ) : null}
+                  <div className="rounded-xl bg-amber-50 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-amber-600">GPT venues proposal</p>
+                      <Button type="button" variant="outline" size="sm" onClick={applyGptVenuesToForm} disabled={!gptSuggestedVenues}>
+                        反映
+                      </Button>
+                    </div>
+                    <JsonBlock value={gptSuggestedVenues ?? []} />
+                  </div>
+                </div>
               </div>
             </div>
           </Card>
@@ -1461,10 +1643,46 @@ export default function TrainingDatasetReviewPage() {
                 <h2 className="font-bold">group_candidates</h2>
                 <p className="mt-1 text-sm text-slate-500">Ground Truthではグループ名を編集します。score / match_method は予測メタ情報として表示のみです。</p>
               </div>
-              <Button type="button" variant="outline" onClick={addGroupCandidate}>
-                <Plus className="mr-2 h-4 w-4" />
-                グループ追加
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" onClick={applyGptGroupsToForm} disabled={!gptSuggestedGroups}>
+                  GPT JSONをフォームへ反映
+                </Button>
+                <Button type="button" variant="outline" onClick={addGroupCandidate}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  グループ追加
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">Prediction / Current / GPT count</p>
+                <div className="mt-2 grid gap-2 text-sm font-semibold text-slate-700 sm:grid-cols-3">
+                  <p className="rounded-lg bg-white p-2">P {Array.isArray(candidate.prediction_json.group_candidates) ? candidate.prediction_json.group_candidates.length : 0}</p>
+                  <p className="rounded-lg bg-white p-2">GT {form.group_candidates.length}</p>
+                  <p className="rounded-lg bg-white p-2">GPT {gptSuggestedGroups?.length ?? 0}</p>
+                </div>
+              </div>
+              <ReviewCommentBlock title="groups" countComment={gptGroupsReview.count_comment} contentComment={gptGroupsReview.content_comment} />
+            </div>
+
+            <GptIssuesList issues={gptGroupsReview.issues} approved={gptGroupsReview.approved} />
+
+            <div className="grid gap-3 xl:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <h3 className="font-bold">Prediction JSON</h3>
+                  <CopyButton text={prettyJson(candidate.prediction_json.group_candidates ?? [])} />
+                </div>
+                <JsonBlock value={candidate.prediction_json.group_candidates ?? []} />
+              </div>
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <h3 className="font-bold">GPT corrected_json</h3>
+                  <CopyButton text={prettyJson(gptSuggestedGroups ?? [])} />
+                </div>
+                <JsonBlock value={gptSuggestedGroups ?? []} />
+              </div>
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-slate-200">
@@ -1541,10 +1759,46 @@ export default function TrainingDatasetReviewPage() {
                 <h2 className="font-bold">sessions</h2>
                 <p className="mt-1 text-sm text-slate-500">時間枠は「時刻 / 種別 / 出演者またはタイトル / 場所」で確認できるようにしています。</p>
               </div>
-              <Button type="button" variant="outline" onClick={addSession}>
-                <Plus className="mr-2 h-4 w-4" />
-                Session追加
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" onClick={applyGptSessionsToForm} disabled={!gptSuggestedSessions}>
+                  GPT JSONをフォームへ反映
+                </Button>
+                <Button type="button" variant="outline" onClick={addSession}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Session追加
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">Prediction / Current / GPT count</p>
+                <div className="mt-2 grid gap-2 text-sm font-semibold text-slate-700 sm:grid-cols-3">
+                  <p className="rounded-lg bg-white p-2">P {Array.isArray(candidate.prediction_json.sessions) ? candidate.prediction_json.sessions.length : 0}</p>
+                  <p className="rounded-lg bg-white p-2">GT {form.sessions.length}</p>
+                  <p className="rounded-lg bg-white p-2">GPT {gptSuggestedSessions?.length ?? 0}</p>
+                </div>
+              </div>
+              <ReviewCommentBlock title="sessions" countComment={gptSessionsReview.count_comment} contentComment={gptSessionsReview.content_comment} />
+            </div>
+
+            <GptIssuesList issues={gptSessionsReview.issues} approved={gptSessionsReview.approved} />
+
+            <div className="grid gap-3 xl:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <h3 className="font-bold">Prediction JSON</h3>
+                  <CopyButton text={prettyJson(candidate.prediction_json.sessions ?? [])} />
+                </div>
+                <JsonBlock value={candidate.prediction_json.sessions ?? []} />
+              </div>
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <h3 className="font-bold">GPT corrected_json</h3>
+                  <CopyButton text={prettyJson(gptSuggestedSessions ?? [])} />
+                </div>
+                <JsonBlock value={gptSuggestedSessions ?? []} />
+              </div>
             </div>
 
             <div className="space-y-3">
