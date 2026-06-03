@@ -281,6 +281,30 @@ function buildGroundTruthPayload(form: GroundTruthForm): Record<string, unknown>
   };
 }
 
+function parseJsonArrayOrFallback(jsonText: string, fallback: unknown[]): unknown[] {
+  try {
+    const parsed = JSON.parse(jsonText || "[]");
+    return Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function buildExtractionReviewCopyPayload(
+  candidate: TrainingEventCandidateRead,
+  form: GroundTruthForm,
+  groupJson: string,
+  sessionJson: string,
+): Record<string, unknown> {
+  return {
+    candidate_id: candidate.id,
+    processing_route: candidate.processing_route ?? candidate.input_payload_json?.processing_route ?? candidate.input_payload_json?.selected_route ?? null,
+    extraction_review_json: candidate.extraction_plan ?? candidate.input_payload_json?.extraction_plan ?? {},
+    group_candidates: parseJsonArrayOrFallback(groupJson, form.group_candidates),
+    sessions: parseJsonArrayOrFallback(sessionJson, form.sessions),
+  };
+}
+
 export default function TrainingDatasetReviewPage() {
   const params = useParams<{ candidateId: string }>();
   const router = useRouter();
@@ -637,6 +661,7 @@ export default function TrainingDatasetReviewPage() {
   const currentImageUrl = currentImageAssetId ? sourceAssetImageUrl(currentImageAssetId) : "";
   const currentImageDownloadUrl = currentImageAssetId ? sourceAssetImageUrl(currentImageAssetId, true) : "";
   const currentImageFilename = imageModalIndex !== null ? getAssetFilename(currentImageAsset, imageModalIndex) : "source_image.jpg";
+  const extractionReviewCopyPayload = buildExtractionReviewCopyPayload(candidate, form, groupJson, sessionJson);
 
   return (
     <div className="space-y-6">
@@ -840,11 +865,14 @@ export default function TrainingDatasetReviewPage() {
 
         <div className="space-y-4">
           <Card className="min-w-0 space-y-3 p-5">
-            <div>
-              <h2 className="font-bold">Extraction Plan</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Session全体は source_type ではなく、画像ごとの分類結果から選ばれた処理戦略として扱います。
-              </p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-bold">Extraction Plan</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Session全体は source_type ではなく、画像ごとの分類結果から選ばれた処理戦略として扱います。
+                </p>
+              </div>
+              <CopyButton text={prettyJson(extractionReviewCopyPayload)} />
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <div className="rounded-xl bg-slate-50 p-3">
@@ -1307,6 +1335,13 @@ export default function TrainingDatasetReviewPage() {
       </Card>
 
       <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+        <Card className="min-w-0 p-5 lg:col-span-2">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="font-bold">extraction_review_bundle</h3>
+            <CopyButton text={prettyJson(extractionReviewCopyPayload)} />
+          </div>
+          <JsonBlock value={extractionReviewCopyPayload} />
+        </Card>
         <Card className="min-w-0 p-5">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h3 className="font-bold">prediction_json</h3>
