@@ -234,6 +234,61 @@ function CopyButton({ text, label = "Copy", copiedLabel = "Copied" }: { text: st
   );
 }
 
+async function copyImageToClipboard(imageUrl: string, fallbackLabel: string): Promise<{ ok: boolean; message: string }> {
+  if (!("clipboard" in navigator)) {
+    return { ok: false, message: "このブラウザはクリップボードAPIをサポートしていません。" };
+  }
+  try {
+    const response = await fetch(imageUrl, { credentials: "same-origin" });
+    if (!response.ok) {
+      return { ok: false, message: "画像の取得に失敗しました。" };
+    }
+    const blob = await response.blob();
+    if (typeof ClipboardItem !== "undefined" && typeof navigator.clipboard.write === "function" && blob.size > 0) {
+      const payload = new ClipboardItem({ [blob.type || "image/png"]: blob });
+      await navigator.clipboard.write([payload]);
+      return { ok: true, message: "画像をコピーしました。" };
+    }
+    await navigator.clipboard.writeText(imageUrl);
+    return { ok: true, message: `${fallbackLabel} をコピーしました。` };
+  } catch {
+    return { ok: false, message: "画像コピーに失敗しました。" };
+  }
+}
+
+function CopyImageButton({ imageUrl, label, fallbackLabel }: { imageUrl: string; label: string; fallbackLabel: string }) {
+  const [state, setState] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function handleCopy() {
+    if (state === "copying") return;
+    setState("copying");
+    setMessage(null);
+    const result = await copyImageToClipboard(imageUrl, fallbackLabel);
+    if (result.ok) {
+      setState("copied");
+      setTimeout(() => setState("idle"), 1200);
+      return;
+    }
+    setState("error");
+    setMessage(result.message);
+    setTimeout(() => {
+      setState("idle");
+      setMessage(null);
+    }, 1800);
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <button type="button" onClick={handleCopy} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-500 hover:text-slate-900">
+        <ClipboardCopy className="h-3.5 w-3.5" />
+        {state === "copying" ? "コピー中" : state === "copied" ? "コピー済み" : state === "error" ? "失敗" : label}
+      </button>
+      {message ? <span className="text-[10px] text-red-600">{message}</span> : null}
+    </div>
+  );
+}
+
 function benchmarkSummary(run: TrainingCandidateBenchmarkRunRead): string {
   const prediction = run.prediction_json ?? {};
   const sessions = Array.isArray(prediction.sessions) ? prediction.sessions.length : 0;
@@ -788,6 +843,11 @@ export default function TrainingDatasetReviewPage() {
                         correct: {form.correct_item_source_types[index]?.correct_source_type || "-"}
                       </p>
                       <div className="mt-2 flex items-center gap-2 text-[11px] font-bold">
+                        <CopyImageButton
+                          imageUrl={imageUrl}
+                          label="画像コピー"
+                          fallbackLabel={`${filename} URLコピー`}
+                        />
                         <a
                           href={imageUrl}
                           target="_blank"
@@ -1418,9 +1478,14 @@ export default function TrainingDatasetReviewPage() {
               <p className="font-mono text-sm">
                 image {imageModalIndex + 1} / {imageAssets.length}
               </p>
-              <div className="flex items-center gap-2">
-                {currentImageAssetId ? (
-                  <>
+                <div className="flex items-center gap-2">
+                  <CopyImageButton
+                    imageUrl={currentImageUrl}
+                    label="画像コピー"
+                    fallbackLabel={`${currentImageFilename} URLコピー`}
+                  />
+                  {currentImageAssetId ? (
+                    <>
                     <a
                       href={currentImageUrl}
                       target="_blank"
