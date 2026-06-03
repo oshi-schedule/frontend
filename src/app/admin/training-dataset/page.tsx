@@ -181,14 +181,13 @@ export default function TrainingDatasetPage() {
               className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
             >
               <option value="auto">auto（画像ごとに推定）</option>
-              <option value="event_info">event_info</option>
-              <option value="x_screenshot">x_screenshot</option>
-              <option value="normal_timetable">normal_timetable</option>
-              <option value="timetable">timetable</option>
+              <option value="schedule_document">schedule_document</option>
               <option value="flyer">flyer</option>
+              <option value="x_post">x_post</option>
+              <option value="other">other</option>
             </select>
             <span className="mt-2 block text-xs leading-relaxed text-slate-500">
-              autoではBackendが画像ごとにsource typeを推定します。手動選択した場合は、現状アップロード全体へのhintとして扱われます。
+              autoではBackendが画像ごとにsource typeを推定します。手動選択した場合は、画像分類のhintとして扱われます。
             </span>
           </label>
 

@@ -57,13 +57,9 @@ type GroundTruthForm = {
 };
 
 const SOURCE_TYPE_OPTIONS = [
-  "event_info",
-  "x_screenshot",
-  "normal_timetable",
-  "timetable",
   "schedule_document",
-  "meet_and_greet",
   "flyer",
+  "x_post",
   "other",
 ];
 
@@ -95,8 +91,22 @@ function getAssetFilename(asset: unknown, index: number): string {
   return getStringField(asset, "filename") || `source_image_${index + 1}.jpg`;
 }
 
+function normalizeImageSourceTypeLabel(value: unknown): string {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["schedule_document", "timetable", "normal_timetable", "meet_and_greet", "meet_and_greet_table"].includes(normalized)) {
+    return "schedule_document";
+  }
+  if (["flyer", "event_info"].includes(normalized)) {
+    return "flyer";
+  }
+  if (["x_post", "x_screenshot"].includes(normalized)) {
+    return "x_post";
+  }
+  return normalized || "";
+}
+
 function sourceTypeHintInitialCorrect(candidate: TrainingEventCandidateRead | null): string {
-  const hint = String(candidate?.source_type_hint ?? candidate?.input_payload_json?.source_type_hint ?? "").trim();
+  const hint = normalizeImageSourceTypeLabel(candidate?.source_type_hint ?? candidate?.input_payload_json?.source_type_hint);
   if (!hint || hint === "auto" || hint === "training_dataset") return "";
   return SOURCE_TYPE_OPTIONS.includes(hint) ? hint : "";
 }
@@ -161,7 +171,7 @@ function buildItemSourceTypeDrafts(candidate: TrainingEventCandidateRead | null)
     if (!item || typeof item !== "object") return;
     const record = item as Record<string, unknown>;
     const assetId = typeof record.source_asset_id === "string" ? record.source_asset_id : "";
-    const correct = typeof record.correct_source_type === "string" ? record.correct_source_type : "";
+    const correct = normalizeImageSourceTypeLabel(record.correct_source_type);
     if (assetId && correct) existingByAssetId.set(assetId, correct);
   });
 
@@ -172,7 +182,7 @@ function buildItemSourceTypeDrafts(candidate: TrainingEventCandidateRead | null)
       source_asset_id: sourceAssetId,
       filename: getStringField(asset, "filename") || `image_${index + 1}`,
       predicted_source_type: predicted,
-      correct_source_type: existingByAssetId.get(sourceAssetId) || initialCorrectSourceType || predicted,
+      correct_source_type: existingByAssetId.get(sourceAssetId) || initialCorrectSourceType || normalizeImageSourceTypeLabel(predicted),
     };
   });
 }
@@ -242,7 +252,7 @@ function buildGroundTruthPayload(form: GroundTruthForm): Record<string, unknown>
       source_asset_id: item.source_asset_id || null,
       filename: item.filename || null,
       predicted_source_type: item.predicted_source_type || null,
-      correct_source_type: item.correct_source_type || null,
+      correct_source_type: normalizeImageSourceTypeLabel(item.correct_source_type) || null,
     })),
     event_name: form.event_name.trim() || null,
     event_date: form.event_date || null,
@@ -870,7 +880,7 @@ export default function TrainingDatasetReviewPage() {
             <div className="rounded-2xl border border-slate-200 p-4">
               <h3 className="font-bold">Image Source Type Labels</h3>
               <p className="mt-1 text-sm text-slate-500">
-                multi画像では、画像ごとの分類器教師データとして predicted / correct を保存します。correctの初期値には協力者のsource type hintを使います。
+                multi画像では、画像分類器の教師データとして schedule_document / flyer / x_post / other のcorrectを保存します。
               </p>
               <div className="mt-3 space-y-3">
                 {form.correct_item_source_types.map((item, index) => (
